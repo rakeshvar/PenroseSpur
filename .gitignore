@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated diagnostics and visualizations
+tests/output/
+tests/debruijn/*.svg
+
+# Generated sampler statistics databases
+inness_data/
