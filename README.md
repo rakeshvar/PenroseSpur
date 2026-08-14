@@ -50,19 +50,59 @@ python sampler.py               # smoke test both symmetries
 ```python
 from sampler import SpurSampler
 
-sampler = SpurSampler(symmetry=5, num_tiles=96, translation=2.0, seed=0)
+sampler = SpurSampler(
+    symmetry=5,
+    num_tiles=96,
+    translation_canvas=2.0,
+    seed=0,
+)
 batch = sampler.sample_batch(64)
-batch["xya"]      # (64, 96, 3) float32 on device: x, y, angle
+batch["xya"]      # (64, 96, 3): zero-mean x/y per sample, unit-variance scaled angle
 batch["colors"]   # (64, 96)  hex: dark/light, pen: 1 = thin rhombus
 batch["labels"]   # (64,)     MPEG7 class ids (70 classes)
 batch["indices"]  # (64, 96)  mother-canvas tile ids
 batch["inness"]   # (64, 96)  soft tile inness at selection time
+
+noise = sampler.sample_noise(64)  # N(0, I) positions
 ```
 
 Pass `mask_idx` to `sample_batch` for class-conditioned sampling, and
 `return_vertices=True` to also get the polygon vertices `(B, N, V, 2)` for
 rendering. `transform_and_inness(mask_idx)` exposes the per-tile inness of all
 M mother tiles for one rotation/translation draw.
+
+After tile selection and augmentation, each returned sample is translated so
+its tile-center mean is exactly `(0, 0)`. Returned vertices receive the same
+translation.
+
+Angles returned by both `sample_batch` and `sample_noise` have unit variance:
+radian angles are wrapped to `[-pi, pi)` and scaled by `sqrt(3)/pi`, so noise
+angles are uniform on `[-sqrt(3), sqrt(3)]`.
+
+`sample_noise` uses unit-scale Gaussian XY coordinates, `N(0, I)`, with no
+distribution or radius override.
+
+## Matching
+
+`match.py` matches noise rows to sampled data with exact LSA or GPU-native
+Sinkhorn outputs:
+
+```python
+from match import match
+
+noise = sampler.sample_noise(64)
+matched = match(batch["xya"], noise, method="lsa")
+matched_argmax = match(
+    batch["xya"], noise, method="argmax", epsilon=0.03, iterations=7
+)
+barycenters = match(
+    batch["xya"], noise, method="barycenter", epsilon=0.03, iterations=7
+)
+```
+
+`lsa` returns a true permutation. `argmax` can reuse the same noise row, and
+`barycenter` returns a row-normalized soft weighted average rather than a
+permutation. Sinkhorn defaults to epsilon `0.03` and 10 iterations.
 
 ## Sanity checks and reports
 
@@ -79,7 +119,8 @@ python tests/check_stats.py [copies]  # full stats sweep over N; findings in tes
 - `masks.py` — builds the mask tensor in memory
 - `canvas.py` — builds mother canvas tensors in memory
 - `sampler.py` — `SpurSampler`, the on-the-fly batch generator
+- `match.py` — exact LSA and Sinkhorn-based noise matching
 - `tests/show_masks.py`, `tests/show_samples.py`, `tests/show_canvas.py`,
   `tests/show_inness.py` — visual sanity checks (output in `tests/output/`)
 - `tests/check_stats.py`, `tests/check_stats.md` — statistics sweep and findings
-- `requirements.txt` — numpy, pillow, torch, matplotlib
+- `requirements.txt` — numpy, pillow, scipy, torch, matplotlib, plotly

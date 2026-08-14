@@ -3,21 +3,36 @@ On-the-fly sample generation.
 
 Builds the mask tensor and mother canvas once; 
 then each batch is fully vectorized on the device:
-  1. pick B masks, draw a rotation theta ~ U(-pi, pi) and a translation
+  1. pick B masks, draw a rotation θ ~ U(-pi, pi) and a translation
      ~ U(-T, T)^2 (T = translation range in canvas units) per sample,
   2. rotate + translate all M canvas tiles (center + V vertices = V+1 inness points per tile),
   3. map points to mask pixels and sum soft mask values -> inness 0..V+1,
   4. add U(0, 1) noise to break ties, torch.topk to keep the best N tiles.
 
-Outputs per batch (all on device): xya (B, N, 3), colors (B, N), inness (B, N),
-indices (B, N), labels (B,) -- same layout as the pre-generated
-PenroseDiffusion datasets.
+Outputs per batch (all on device):
+    labels (B,),
+    xya (B, N, 3) with per-sample zero-mean xy and a unit-variance scaled angle,
+    colors (B, N), 
+    inness (B, N), 
+    indices (B, N), 
+    mask_idx (B,),
+    rotation_canvas (B,),
+    rotation_mask (B,),
 """
 import math
 import torch
 
 from canvas import build_canvas_for_mask
 from masks import build_masks
+
+
+ANGLE_SCALE = math.sqrt(3.) / math.pi
+
+
+def _scaled_angle(angle):
+    """Wrap radians to [-pi, pi), then scale to unit variance."""
+    wrapped = torch.remainder(angle + math.pi, 2. * math.pi) - math.pi
+    return wrapped * ANGLE_SCALE
 
 
 class SpurSampler:
@@ -86,7 +101,7 @@ class SpurSampler:
         every mother tile against the given masks.
 
         Returns pts (B, M, V+1, 2) transformed 'cvertices' (index 0 is the
-        tile center), theta (B,) rotations, and float inness (B, M).
+        tile center), θ (B,) rotations, and float inness (B, M).
         """
         B, dev = len(mask_idx), self.device
 
@@ -94,8 +109,8 @@ class SpurSampler:
         # Rotate + translate the canvas
         #---------------------------------
         trans = (torch.rand(B, 1, 1, 2, device=dev, generator=generator) * 2 - 1) * self.translation_cu
-        theta = (torch.rand(B, device=dev, generator=generator) * 2 - 1) * self.rotation_canvas
-        cos, sin = torch.cos(theta), torch.sin(theta)
+        θ = (torch.rand(B, device=dev, generator=generator) * 2 - 1) * self.rotation_canvas
+        cos, sin = torch.cos(θ), torch.sin(θ)
         rot_canvas = torch.stack([
                 torch.stack([cos, sin], -1),
                 torch.stack([-sin, cos], -1),], -2,)
@@ -113,13 +128,14 @@ class SpurSampler:
         in_bounds = (pxlxs >= 0) & (pxlxs < self.H) & (pxlys >= 0) & (pxlys < self.W)
         inness = (vals * in_bounds).sum(-1)                                                   # (B, M) in 0..V+1
 
-        return cvertices, theta, inness
+        return cvertices, θ, inness
 
     def sample_batch(self, batch_size, mask_idx=None, generator=None, return_vertices=False):
         """
         mask_idx: optional (B,) tensor of mask indices; random if None.
-        Returns dict with xya (B, N, 3), colors (B, N), indices (B, N),
-        labels (B,), inness (B, N); vertices (B, N, V, 2) if requested.
+        Returns dict with unit-variance-angle xya (B, N, 3), colors (B, N),
+        indices (B, N), labels (B,), inness (B, N); vertices (B, N, V, 2)
+        if requested.
         """
         B, dev = batch_size, self.device
         if mask_idx is None:
@@ -127,7 +143,7 @@ class SpurSampler:
         else:
             mask_idx = mask_idx.to(dev)
 
-        cvertices, theta_canvas, inness = self.transform_and_inness(mask_idx, generator=generator)
+        cvertices, θ_canvas, inness = self.transform_and_inness(mask_idx, generator=generator)
 
         #---------------------------------
         # Top-N with random tie-breaking
@@ -138,40 +154,92 @@ class SpurSampler:
         #---------------------------------
         # Gather outputs
         #---------------------------------
-        centers_t = cvertices[:, :, 0, :]                                       # (B, M, 2)
-        xy = torch.gather(centers_t, 1, top[..., None].expand(-1, -1, 2))
-        ang = self.angles[top] + theta_canvas[:, None]
+        xy = cvertices[:, :, 0, :]                                       # (B, M, 2)
+        xy = torch.gather(xy, 1, top[..., None].expand(-1, -1, 2))
+        ang = self.angles[top] + θ_canvas[:, None]
+        if return_vertices:
+            vertices = cvertices[:, :, 1:, :]                                      # (B, M, V, 2)
+            topv = top[:, :, None, None].expand(-1, -1, vertices.shape[2], 2)
+            vertices = torch.gather(vertices, 1, topv)                             # (B, N, V, 2)
 
         #---------------------------------
         # Rotate the mask
         #---------------------------------
-        theta_mask = (torch.rand(B, device=dev, generator=generator) * 2 - 1) * self.rotation_mask
-        cos, sin = torch.cos(theta_mask), torch.sin(theta_mask)
+        θ_mask = (torch.rand(B, device=dev, generator=generator) * 2 - 1) * self.rotation_mask
+        cos, sin = torch.cos(θ_mask), torch.sin(θ_mask)
         rot_mask = torch.stack([
                 torch.stack([cos, sin], -1),
                 torch.stack([-sin, cos], -1),], -2,)
-        xy = torch.einsum("mvc,bcd->bmvd", xy, rot_mask)
-        ang = ang + theta_mask[:, None]
+        xy = torch.einsum("bmc,bcd->bmd", xy, rot_mask)
+        ang = ang + θ_mask[:, None]
+        if return_vertices:
+            vertices = torch.einsum("bmvc,bcd->bmvd", vertices, rot_mask)
+
+        sample_center = xy.mean(dim=1, keepdim=True)
+        xy = xy - sample_center
+        if return_vertices:
+            vertices = vertices - sample_center[:, :, None, :]
 
         #---------------------------------
         # Return outputs
         #---------------------------------
+        ang = _scaled_angle(ang)
         out = {
-            "xya": torch.cat([xy, ang[..., None]], dim=-1),                   # (B, N, 3)
+            "xya": torch.cat([xy, ang[..., None]], dim=-1),    # (B, N, 3)
             "colors": self.colors[top],                                       # (B, N)
             "indices": self.indices[top],                                     # (B, N)
             "labels": self.labels[mask_idx],                                  # (B,)
             "inness": torch.gather(inness, 1, top),                           # (B, N)
             "mask_idx": mask_idx,
-            "rotation_canvas": theta_canvas,
-            "rotation_mask": theta_mask,
+            "rotation_canvas": θ_canvas,
+            "rotation_mask": θ_mask,
         }
+
         if return_vertices:
-            verts = cvertices[:, :, 1:, :]                                      # (B, M, V, 2)
-            V = verts.shape[2]
-            out["vertices"] = torch.gather(
-                verts, 1, top[:, :, None, None].expand(-1, -1, V, 2))         # (B, N, V, 2)
+            out["vertices"] = vertices
+
         return out
+
+    def sample_noise(self, batch_size, generator=None):
+        """Sample unit-variance Gaussian-XY noise with shape (B, N, 3)."""
+        shape = (batch_size, self.num_ret_tiles)
+        kwargs = {
+            "device": self.device,
+            "dtype": self.cvertices.dtype,
+            "generator": generator,
+        }
+        xy = torch.randn((*shape, 2), **kwargs)
+        angle = (torch.rand((*shape, 1), **kwargs) * 2. - 1.) * math.sqrt(3.)
+        return torch.cat((xy, angle), dim=-1)
+
+    def sample_data_noise(self, batch_size, mask_idx=None, generator=None):
+        """Sample data and noise independently and return them unchanged."""
+        data = self.sample_batch(
+            batch_size,
+            mask_idx=mask_idx,
+            generator=generator,
+        )["xya"]
+        noise = self.sample_noise(batch_size, generator=generator)
+        return data, noise
+
+    def sample_matched_data_noise(
+        self,
+        batch_size,
+        method="lsa",
+        mask_idx=None,
+        generator=None,
+        **match_kwargs,
+    ):
+        """Sample data and noise, then match noise to data (LSA by default)."""
+        from match import match
+
+        data, noise = self.sample_data_noise(
+            batch_size,
+            mask_idx=mask_idx,
+            generator=generator,
+        )
+        matched_noise = match(data, noise, method=method, **match_kwargs)
+        return data, matched_noise
 
 
 if __name__ == "__main__":

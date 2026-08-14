@@ -16,7 +16,7 @@ class Palette(NamedTuple):
     carccolor: str | None = None
 
 
-HEX_PALETTE = Palette("#D8D388", "#4ee055", "#ddb4a2", "#38b2c2")
+HEX_PALETTE = Palette("#D8D388a0", "#4ee055a0", "#ddb4a2a0", "#38b2c2a0")
 PENROSE_PALETTE = Palette(
     "#ffcccc",
     "#ff99aa",

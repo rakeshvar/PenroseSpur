@@ -1,6 +1,8 @@
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
+from pathlib import Path
 import sys
 
 
@@ -104,7 +106,9 @@ def visualize_debruijn_grid(kmax, gamma=None, rng=None, num_dirs_to_show=5):
     pts_selected = pt[selected]
 
     print(f"Number of points selected: {len(pts_selected)}/{len(pt)}")
-    plt.scatter(pts_selected.real, pts_selected.imag, c=is_thick[selected], cmap='bwr', s=7, alpha=0.7)
+    thickness_palette = np.array(['#4C78A8', '#F28E2B'])  # muted blue and warm orange
+    thickness_colors = thickness_palette[is_thick[selected].astype(int)]
+    plt.scatter(pts_selected.real, pts_selected.imag, c=thickness_colors, s=1, alpha=0.7)
 
     # Plot the lines based on v_j, k_j, gamma_j . i.e. Re(v_j) x + Im(v_j) y = k_j - gamma_j
     L = 2*kmax
@@ -115,9 +119,9 @@ def visualize_debruijn_grid(kmax, gamma=None, rng=None, num_dirs_to_show=5):
             c = k - gamma[j]
             # plot the line a*x + b*y = c
             if b != 0:
-                plt.plot([-L, L], [(c+a*L)/b, (c-a*L)/b], color=colors[j], linestyle='-', alpha=0.1) 
+                plt.plot([-L, L], [(c+a*L)/b, (c-a*L)/b], color=colors[j], linestyle='-', alpha=0.1, linewidth=0.4)
             else:
-                plt.plot([c/a, c/a], [-L, L], 'm-', alpha=0.1)
+                plt.plot([c/a, c/a], [-L, L], 'm-', alpha=0.1, linewidth=0.4)
     plt.xlim(-2*L, 2*L)
     plt.ylim(-L, L)
     plt.gca().set_aspect('equal', adjustable='box')
@@ -129,32 +133,44 @@ def visualize_debruijn_grid(kmax, gamma=None, rng=None, num_dirs_to_show=5):
     ps3 = p3[selected]/SCALE
     ps4 = p4[selected]/SCALE
     # Plot p1 --- p2 --- p3 --- p4 --- p1
-    plt.plot([ps1.real, ps2.real, ps3.real, ps4.real, ps1.real], 
-             [ps1.imag, ps2.imag, ps3.imag, ps4.imag, ps1.imag], 
-             '-', color='lightgreen', linewidth=1)
+    rhombus_edges = np.stack([
+        np.column_stack((ps1.real, ps1.imag)),
+        np.column_stack((ps2.real, ps2.imag)),
+        np.column_stack((ps3.real, ps3.imag)),
+        np.column_stack((ps4.real, ps4.imag)),
+        np.column_stack((ps1.real, ps1.imag)),
+    ], axis=1)
+    plt.gca().add_collection(
+        LineCollection(rhombus_edges, colors=thickness_colors, linewidths=0.4, alpha=0.7)
+    )
 
     # Draw lines from pto to corresponding centers
     centers_selected = centers[selected] / SCALE
-    plot_to_vertex = 0
+    plot_to_vertex = -1
     if plot_to_vertex == 0:
         for i in range(len(pts_selected)):
             plt.plot([pts_selected.real[i], centers_selected[i, 0]], 
                     [pts_selected.imag[i], centers_selected[i, 1]], 
-                    '--', color='gray', alpha=0.5, linewidth=1)
-    else:
+                    '--', color='gray', alpha=0.5, linewidth=0.4)
+    elif plot_to_vertex > 0:
         puse = (None, ps1, ps2, ps3, ps4)[plot_to_vertex]
         for i in range(len(pts_selected)):
             plt.plot([pts_selected.real[i], puse.real[i]], 
                     [pts_selected.imag[i], puse.imag[i]], 
-                    '--', color='gray', alpha=0.5, linewidth=1)
+                    '--', color='gray', alpha=0.5, linewidth=0.4)
 
     Ks = K[selected].astype(int)
     for i in range(len(Ks)):
-        if abs(pts_selected[i]) > kmax:
-            plt.text(pts_selected.real[i], pts_selected.imag[i], f'{Ks[i][0]}{Ks[i][1]}{Ks[i][2]}{Ks[i][3]}{Ks[i][4]}', fontsize=5)
+        if abs(pts_selected[i]) > 2*kmax and abs(Ks[i][0]) > 2 and abs(Ks[i][3]) > 2:
+            plt.text(pts_selected.real[i], pts_selected.imag[i], f'{Ks[i][0]}{Ks[i][1]}{Ks[i][2]}{Ks[i][3]}{Ks[i][4]}', fontsize=3)
     
+    if True:
+        plt.axis('off')
 
-    plt.show()
+    output_path = Path('debruijn/visual.svg')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, format='svg', bbox_inches='tight', pad_inches=0)
+    # plt.show()
 #
 
 

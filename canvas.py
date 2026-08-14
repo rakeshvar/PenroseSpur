@@ -47,8 +47,8 @@ def area_of_polygon(symmetry, side):
 #--------------------------------------------------------------------------
 # Universal geometric constant:
 #   Var(x) ≈ Var(y) ≈ VAR_PER_AREA × occupied_area
-# Calibrated once against the normalized MPEG7 masks.
-VAR_PER_AREA = 0.16
+# Calibrated against normalized MPEG7 masks after per-sample XY centering.
+VAR_PER_AREA = 0.1463
 
 
 def target_side_for_unit_var(symmetry, num_tiles, TARGET_VAR=1.):
