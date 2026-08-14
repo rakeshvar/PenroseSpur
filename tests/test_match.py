@@ -25,9 +25,7 @@ def make_noise_sampler(num_tiles=96):
 def test_noise():
     sampler = make_noise_sampler()
 
-    large = sampler.sample_noise(
-        1024, generator=torch.Generator().manual_seed(7)
-    )
+    large = sampler.sample_noise(1024, generator=torch.Generator().manual_seed(7))
     assert large.shape == (1024, 96, 3)
     xy = large[..., :2]
     assert abs(float(xy.mean())) < 0.02
@@ -51,9 +49,7 @@ def test_scaled_sample_angles():
     sampler.M = sampler.num_ret_tiles = 4
     sampler.V1 = 1
     sampler.rotation_mask = 0.
-    sampler.angles = torch.tensor(
-        [-4. * math.pi, -math.pi / 2., math.pi / 2., 4. * math.pi]
-    )
+    sampler.angles = torch.tensor([-4. * math.pi, -math.pi / 2., math.pi / 2., 4. * math.pi])
     sampler.colors = torch.zeros(4, dtype=torch.uint8)
     sampler.indices = torch.arange(4)
     sampler.labels = torch.zeros(1, dtype=torch.long)
@@ -65,24 +61,13 @@ def test_scaled_sample_angles():
     def transform_and_inness(mask_idx, generator=None):
         batch = len(mask_idx)
         inness = torch.arange(4, dtype=torch.float32).expand(batch, -1)
-        return (
-            centers.expand(batch, -1, -1, -1),
-            torch.zeros(batch),
-            inness,
-            (inness[..., None] > 0).expand(-1, -1, 2),
-        )
+        return centers.expand(batch, -1, -1, -1), torch.zeros(batch), inness, (inness[..., None] > 0).expand(-1, -1, 2)
 
     sampler.transform_and_inness = transform_and_inness
-    batch = sampler.sample_batch(
-        2, mask_idx=torch.zeros(2, dtype=torch.long), return_vertices=True
-    )
+    batch = sampler.sample_batch(2, mask_idx=torch.zeros(2, dtype=torch.long), return_vertices=True)
     assert batch["xya"][..., 2].abs().max() <= math.sqrt(3.) + 1e-6
-    assert torch.allclose(
-        batch["xya"][..., :2].mean(dim=1), torch.zeros(2, 2), atol=1e-7
-    )
-    assert torch.allclose(
-        batch["vertices"].mean(dim=(1, 2)), torch.zeros(2, 2), atol=1e-7
-    )
+    assert torch.allclose(batch["xya"][..., :2].mean(dim=1), torch.zeros(2, 2), atol=1e-7)
+    assert torch.allclose(batch["vertices"].mean(dim=(1, 2)), torch.zeros(2, 2), atol=1e-7)
     assert batch["vertex_in"].shape == (2, 4, 1)
     assert batch["vertex_in"].dtype == torch.bool
 
@@ -96,12 +81,7 @@ def test_inness_is_normalized():
     sampler.H = sampler.W = 1
     sampler.M, sampler.V1 = 2, 3
     sampler.mask_flat = torch.ones(1, 1)
-    sampler.cvertices = torch.tensor(
-        [
-            [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-            [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]],
-        ]
-    )
+    sampler.cvertices = torch.tensor([[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]]])
 
     _, _, inness, vertex_in = sampler.transform_and_inness(torch.tensor([0]))
 
@@ -109,10 +89,7 @@ def test_inness_is_normalized():
     assert inness.min() >= 0.0
     assert inness.max() <= 1.0
     assert vertex_in.dtype == torch.bool
-    assert torch.equal(
-        vertex_in,
-        torch.tensor([[[True, True, True], [True, False, False]]]),
-    )
+    assert torch.equal(vertex_in, torch.tensor([[[True, True, True], [True, False, False]]]))
 
 
 def assert_permutation(permutation):
@@ -126,9 +103,7 @@ def test_sinkhorn_argmax_annealing():
     initial = sinkhorn(scores, iterations=100).argmax(dim=2)
     assert torch.unique(initial).numel() < scores.shape[1]
 
-    _, annealed, converged = sinkhorn_annealed_argmax(
-        scores, iterations=100, anneal_steps=8
-    )
+    _, annealed, converged = sinkhorn_annealed_argmax(scores, iterations=100, anneal_steps=8)
     assert converged
     assert_permutation(annealed)
 
@@ -136,12 +111,8 @@ def test_sinkhorn_argmax_annealing():
 def test_matching():
     generator = torch.Generator().manual_seed(23)
     noise = torch.randn((3, 12, 3), generator=generator)
-    source_permutation = torch.stack(
-        [torch.randperm(12, generator=generator) for _ in range(3)]
-    )
-    data = noise.gather(
-        1, source_permutation.unsqueeze(-1).expand(-1, -1, noise.shape[-1])
-    )
+    source_permutation = torch.stack([torch.randperm(12, generator=generator) for _ in range(3)])
+    data = noise.gather(1, source_permutation.unsqueeze(-1).expand(-1, -1, noise.shape[-1]))
 
     exact = match(data, noise, method="lsa", return_details=True)
     assert torch.equal(exact.matched_noise, data)
@@ -154,9 +125,7 @@ def test_matching():
     assert argmax.soft_permutation is not None
     assert_permutation(argmax.permutation)
 
-    barycenter = match(
-        data, noise, method="sinkhorn.barycenter", return_details=True
-    )
+    barycenter = match(data, noise, method="sinkhorn.barycenter", return_details=True)
     assert barycenter.matched_noise.shape == noise.shape
     assert barycenter.permutation is None
     assert barycenter.soft_permutation is not None
@@ -164,12 +133,7 @@ def test_matching():
     weights = weights / weights.sum(dim=2, keepdim=True)
     assert torch.allclose(weights.sum(dim=2), torch.ones_like(weights[..., 0]))
     assert torch.allclose(barycenter.matched_noise, torch.bmm(weights, noise))
-    assert MATCH_METHODS == (
-        "lsa",
-        "sinkhorn.argmax",
-        "sinkhorn.barycenter",
-        "sinkhorn.lsa",
-    )
+    assert MATCH_METHODS == ("lsa", "sinkhorn.argmax", "sinkhorn.barycenter", "sinkhorn.lsa")
 
 
 def test_color_constrained_matching():
@@ -182,14 +146,7 @@ def test_color_constrained_matching():
     assert torch.equal(unconstrained.permutation, torch.tensor([[1, 0]]))
 
     for method in MATCH_METHODS:
-        result = match(
-            data,
-            noise,
-            method=method,
-            colors=colors,
-            iterations=20,
-            return_details=True,
-        )
+        result = match(data, noise, method=method, colors=colors, iterations=20, return_details=True)
         assert torch.allclose(result.matched_noise, noise)
         if result.permutation is not None:
             assert torch.equal(result.permutation, torch.tensor([[0, 1]]))

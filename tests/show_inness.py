@@ -106,22 +106,14 @@ def main():
         if symmetry == 5:
             del sampler
             sampler = SpurSampler(5, NUM_TILES, TRANSLATION, seed=SEED)
-        points, theta, inness, _ = sampler.transform_and_inness(
-            torch.tensor([mask_idx], device=sampler.device)
-        )
+        points, theta, inness, _ = sampler.transform_and_inness(torch.tensor([mask_idx], device=sampler.device))
         points, theta, inness = points[0], theta[0], inness[0]
 
         title = (f"{names[class_id]}-{sample_id}   symmetry {symmetry}   "
                  f"M={sampler.M}   inness 0..1   "
                  f"rot {np.degrees(float(theta)):+.0f}\u00b0")
-        render(
-            sampler,
-            points,
-            inness,
-            sampler.masks[mask_idx].cpu().numpy(),
-            title,
-            OUT_DIR / f"inness_s{symmetry}_{names[class_id]}-{sample_id}.png",
-        )
+        output = OUT_DIR / f"inness_s{symmetry}_{names[class_id]}-{sample_id}.png"
+        render(sampler, points, inness, sampler.masks[mask_idx].cpu().numpy(), title, output)
 
 
 if __name__ == "__main__":

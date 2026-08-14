@@ -129,9 +129,8 @@ class SpurSampler:
                             flatpxxy.view(B, -1)).view(B, self.M, self.V1)
 
         in_bounds = (pxlxs >= 0) & (pxlxs < self.H) & (pxlys >= 0) & (pxlys < self.W)
-        
         vals = vals * in_bounds
-        inness = vals.sum(-1) / self.V1                                         # (B, M) in 0..1
+        inness = vals.sum(-1) / self.V1                                 # (B, M) in 0..1
         vertex_in = vals > 0.5
 
         return cvertices, θ, inness, vertex_in
@@ -202,8 +201,7 @@ class SpurSampler:
             "vertex_in": vertex_in,                                           # (B, N, V+1)
             "mask_idx": mask_idx,
             "rotation_canvas": θ_canvas,
-            "rotation_mask": θ_mask,
-        }
+            "rotation_mask": θ_mask}
 
         if return_vertices:
             out["vertices"] = vertices
@@ -213,41 +211,22 @@ class SpurSampler:
     def sample_noise(self, batch_size, generator=None):
         """Sample unit-variance Gaussian-XY noise with shape (B, N, 3)."""
         shape = (batch_size, self.num_ret_tiles)
-        kwargs = {
-            "device": self.device,
-            "dtype": self.cvertices.dtype,
-            "generator": generator,
-        }
+        kwargs = {"device": self.device, "dtype": self.cvertices.dtype, "generator": generator}
         xy = torch.randn((*shape, 2), **kwargs)
         angle = (torch.rand((*shape, 1), **kwargs) * 2. - 1.) * math.sqrt(3.)
         return torch.cat((xy, angle), dim=-1)
 
     def sample_data_noise(self, batch_size, mask_idx=None, generator=None):
         """Sample data and noise independently and return them unchanged."""
-        data = self.sample_batch(
-            batch_size,
-            mask_idx=mask_idx,
-            generator=generator,
-        )["xya"]
+        data = self.sample_batch(batch_size, mask_idx=mask_idx, generator=generator)["xya"]
         noise = self.sample_noise(batch_size, generator=generator)
         return data, noise
 
-    def sample_matched_data_noise(
-        self,
-        batch_size,
-        method="lsa",
-        mask_idx=None,
-        generator=None,
-        **match_kwargs,
-    ):
+    def sample_matched_data_noise(self, batch_size, method="lsa", mask_idx=None, generator=None, **match_kwargs):
         """Sample data and noise, then match noise to data (LSA by default)."""
         from match import match
 
-        data, noise = self.sample_data_noise(
-            batch_size,
-            mask_idx=mask_idx,
-            generator=generator,
-        )
+        data, noise = self.sample_data_noise(batch_size, mask_idx=mask_idx, generator=generator)
         matched_noise = match(data, noise, method=method, **match_kwargs)
         return data, matched_noise
 
@@ -266,12 +245,7 @@ if __name__ == "__main__":
         for i in range(8):
             label = sampler.class_names[batch["labels"][i]]
             output = output_dir / f"samples/{symmetry}_{i}_{label}.svg"
-            save_polygons(
-                output,
-                batch["vertices"][i],
-                batch["colors"][i],
-                show_arcs=symmetry == 5,
-            )
+            save_polygons(output, batch["vertices"][i], batch["colors"][i], show_arcs=symmetry == 5)
             print(f"Saved {output}")
     
         xy = batch["xya"][..., :2]
