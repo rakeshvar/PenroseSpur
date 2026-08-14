@@ -129,7 +129,7 @@ class SpurSampler:
                             flatpxxy.view(B, -1)).view(B, self.M, self.V1)
 
         in_bounds = (pxlxs >= 0) & (pxlxs < self.H) & (pxlys >= 0) & (pxlys < self.W)
-
+        
         vals = vals * in_bounds
         inness = vals.sum(-1) / self.V1                                         # (B, M) in 0..1
         vertex_in = vals > 0.5
@@ -154,9 +154,7 @@ class SpurSampler:
         #---------------------------------
         # Top-N with random tie-breaking
         #---------------------------------
-        noisy = inness.float() + 1e-3 * torch.rand(
-            B, self.M, device=dev, generator=generator
-        )
+        noisy = inness.float() + 1e-3 * torch.rand(B, self.M, device=dev, generator=generator)
         top = torch.topk(noisy, self.num_ret_tiles, dim=1).indices                # (B, N)
 
         #---------------------------------
@@ -191,14 +189,16 @@ class SpurSampler:
         #---------------------------------
         # Return outputs
         #---------------------------------
-        ang = _scaled_angle(ang)
+        xya = torch.cat([xy, ang[..., None]], dim=-1)
+        xya = _scaled_angle(xya)
+        inness = torch.gather(inness, 1, top)                           
         vertex_in = torch.gather(vertex_in, 1, top[..., None].expand(-1, -1, self.V1))
         out = {
-            "xya": torch.cat([xy, ang[..., None]], dim=-1),    # (B, N, 3)
+            "xya": xya,                                                       # (B, N, 3)
             "colors": self.colors[top],                                       # (B, N)
             "indices": self.indices[top],                                     # (B, N)
             "labels": self.labels[mask_idx],                                  # (B,)
-            "inness": torch.gather(inness, 1, top),                           # (B, N)
+            "inness": inness,                                                 # (B, N)
             "vertex_in": vertex_in,                                           # (B, N, V+1)
             "mask_idx": mask_idx,
             "rotation_canvas": θ_canvas,
