@@ -39,7 +39,7 @@ def normalized_histogram(values, max_bin):
 
 def returned_inness(sampler, mask_idx, generator):
     """Select returned-tile inness using the sampler's top-k rule."""
-    _, _, inness = sampler.transform_and_inness(mask_idx, generator=generator)
+    _, _, inness, _ = sampler.transform_and_inness(mask_idx, generator=generator)
     noisy = inness.float() + 1e-3 * torch.rand(
         inness.shape,
         device=sampler.device,

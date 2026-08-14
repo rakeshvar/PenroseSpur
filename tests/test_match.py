@@ -64,10 +64,12 @@ def test_scaled_sample_angles():
 
     def transform_and_inness(mask_idx, generator=None):
         batch = len(mask_idx)
+        inness = torch.arange(4, dtype=torch.float32).expand(batch, -1)
         return (
             centers.expand(batch, -1, -1, -1),
             torch.zeros(batch),
-            torch.arange(4, dtype=torch.float32).expand(batch, -1),
+            inness,
+            (inness[..., None] > 0).expand(-1, -1, 2),
         )
 
     sampler.transform_and_inness = transform_and_inness
@@ -81,6 +83,8 @@ def test_scaled_sample_angles():
     assert torch.allclose(
         batch["vertices"].mean(dim=(1, 2)), torch.zeros(2, 2), atol=1e-7
     )
+    assert batch["vertex_in"].shape == (2, 4, 1)
+    assert batch["vertex_in"].dtype == torch.bool
 
 
 def test_inness_is_normalized():
@@ -99,11 +103,16 @@ def test_inness_is_normalized():
         ]
     )
 
-    _, _, inness = sampler.transform_and_inness(torch.tensor([0]))
+    _, _, inness, vertex_in = sampler.transform_and_inness(torch.tensor([0]))
 
     assert torch.allclose(inness, torch.tensor([[1.0, 1.0 / 3.0]]))
     assert inness.min() >= 0.0
     assert inness.max() <= 1.0
+    assert vertex_in.dtype == torch.bool
+    assert torch.equal(
+        vertex_in,
+        torch.tensor([[[True, True, True], [True, False, False]]]),
+    )
 
 
 def assert_permutation(permutation):

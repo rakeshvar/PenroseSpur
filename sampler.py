@@ -6,7 +6,8 @@ then each batch is fully vectorized on the device:
   1. pick B masks, draw a rotation θ ~ U(-pi, pi) and a translation
      ~ U(-T, T)^2 (T = translation range in canvas units) per sample,
   2. rotate + translate all M canvas tiles (center + V vertices = V+1 inness points per tile),
-  3. map points to mask pixels and average soft mask values -> inness 0..1,
+  3. map points to mask pixels, average soft values -> inness 0..1, and
+     threshold each probe -> vertex_in,
   4. add U(0, 1) noise to break ties, torch.topk to keep the best N tiles.
 
 Outputs per batch (all on device):
@@ -14,6 +15,7 @@ Outputs per batch (all on device):
     xya (B, N, 3) with per-sample zero-mean xy and a unit-variance scaled angle,
     colors (B, N), 
     inness (B, N), 
+    vertex_in (B, N, V+1),
     indices (B, N), 
     mask_idx (B,),
     rotation_canvas (B,),
@@ -101,7 +103,8 @@ class SpurSampler:
         every mother tile against the given masks.
 
         Returns pts (B, M, V+1, 2) transformed 'cvertices' (index 0 is the
-        tile center), θ (B,) rotations, and float inness (B, M).
+        tile center), θ (B,) rotations, float inness (B, M), and Boolean
+        vertex_in (B, M, V+1).
         """
         B, dev = len(mask_idx), self.device
 
@@ -126,16 +129,19 @@ class SpurSampler:
                             flatpxxy.view(B, -1)).view(B, self.M, self.V1)
 
         in_bounds = (pxlxs >= 0) & (pxlxs < self.H) & (pxlys >= 0) & (pxlys < self.W)
-        inness = (vals * in_bounds).sum(-1) / self.V1                                         # (B, M) in 0..1
 
-        return cvertices, θ, inness
+        vals = vals * in_bounds
+        inness = vals.sum(-1) / self.V1                                         # (B, M) in 0..1
+        vertex_in = vals > 0.5
+
+        return cvertices, θ, inness, vertex_in
 
     def sample_batch(self, batch_size, mask_idx=None, generator=None, return_vertices=False):
         """
         mask_idx: optional (B,) tensor of mask indices; random if None.
         Returns dict with unit-variance-angle xya (B, N, 3), colors (B, N),
-        indices (B, N), labels (B,), inness (B, N); vertices (B, N, V, 2)
-        if requested.
+        indices (B, N), labels (B,), inness (B, N), and Boolean vertex_in
+        (B, N, V+1); vertices (B, N, V, 2) if requested.
         """
         B, dev = batch_size, self.device
         if mask_idx is None:
@@ -143,7 +149,7 @@ class SpurSampler:
         else:
             mask_idx = mask_idx.to(dev)
 
-        cvertices, θ_canvas, inness = self.transform_and_inness(mask_idx, generator=generator)
+        cvertices, θ_canvas, inness, vertex_in = self.transform_and_inness(mask_idx, generator=generator)
 
         #---------------------------------
         # Top-N with random tie-breaking
@@ -186,12 +192,14 @@ class SpurSampler:
         # Return outputs
         #---------------------------------
         ang = _scaled_angle(ang)
+        vertex_in = torch.gather(vertex_in, 1, top[..., None].expand(-1, -1, self.V1))
         out = {
             "xya": torch.cat([xy, ang[..., None]], dim=-1),    # (B, N, 3)
             "colors": self.colors[top],                                       # (B, N)
             "indices": self.indices[top],                                     # (B, N)
             "labels": self.labels[mask_idx],                                  # (B,)
             "inness": torch.gather(inness, 1, top),                           # (B, N)
+            "vertex_in": vertex_in,                                           # (B, N, V+1)
             "mask_idx": mask_idx,
             "rotation_canvas": θ_canvas,
             "rotation_mask": θ_mask,

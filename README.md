@@ -25,7 +25,8 @@ generates every training batch on the device.
      psi^2 = 0.382).
 3. **Sampler** (`sampler.py`, every batch, fully vectorized on the device):
    rotate + translate all M tiles (`SpurSampler.transform_and_inness`), calculate
-   each tile's soft inness 0..V+1 from its center + V vertices, break ties with
+   each tile's soft inness 0..1 from its center + V vertices, record whether
+   each probe exceeds 0.5, break ties with
    U(0,1) noise, and keep the best `num_tiles` via
    `torch.topk`.
 
@@ -62,14 +63,16 @@ batch["colors"]   # (64, 96)  hex: dark/light, pen: 1 = thin rhombus
 batch["labels"]   # (64,)     MPEG7 class ids (70 classes)
 batch["indices"]  # (64, 96)  mother-canvas tile ids
 batch["inness"]   # (64, 96)  soft tile inness at selection time
+batch["vertex_in"] # (64, 96, V+1) thresholded center/vertex mask probes
 
 noise = sampler.sample_noise(64)  # N(0, I) positions
 ```
 
 Pass `mask_idx` to `sample_batch` for class-conditioned sampling, and
 `return_vertices=True` to also get the polygon vertices `(B, N, V, 2)` for
-rendering. `transform_and_inness(mask_idx)` exposes the per-tile inness of all
-M mother tiles for one rotation/translation draw.
+rendering. `transform_and_inness(mask_idx)` exposes the per-tile soft inness and
+Boolean `vertex_in` probes of all M mother tiles for one rotation/translation
+draw.
 
 After tile selection and augmentation, each returned sample is translated so
 its tile-center mean is exactly `(0, 0)`. Returned vertices receive the same

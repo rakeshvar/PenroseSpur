@@ -106,7 +106,7 @@ def main():
         if symmetry == 5:
             del sampler
             sampler = SpurSampler(5, NUM_TILES, TRANSLATION, seed=SEED)
-        points, theta, inness = sampler.transform_and_inness(
+        points, theta, inness, _ = sampler.transform_and_inness(
             torch.tensor([mask_idx], device=sampler.device)
         )
         points, theta, inness = points[0], theta[0], inness[0]
