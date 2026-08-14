@@ -54,7 +54,7 @@ def render(sampler, points, inness, mask, title, path):
     centers = points[:, 0, :].cpu().numpy()              # (M, 2)
     verts = points[:, 1:, :].cpu().numpy()               # (M, V, 2)
     inness = inness.cpu().numpy()
-    vmax = sampler.V1
+    vmax = 1.0
 
     fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -112,7 +112,7 @@ def main():
         points, theta, inness = points[0], theta[0], inness[0]
 
         title = (f"{names[class_id]}-{sample_id}   symmetry {symmetry}   "
-                 f"M={sampler.M}   inness 0..{sampler.V1}   "
+                 f"M={sampler.M}   inness 0..1   "
                  f"rot {np.degrees(float(theta)):+.0f}\u00b0")
         render(
             sampler,

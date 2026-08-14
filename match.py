@@ -61,26 +61,44 @@ def gather_noise(noise, permutation):
 
 
 
-def lsa(cost, workers=None):            # CPU-based 
+def lsa(cost, colors=None, workers=None):            # CPU-based
     """
     Solve each square cost matrix with SciPy's exact LSA solver.
-        Loops over each batch index.
+
+    Assignments are solved independently within each color. When `colors` is
+    None, all rows and columns belong to one color.
     """
+    if colors is not None and colors.shape != cost.shape[:2]:
+        raise ValueError(
+            f"colors must have shape {tuple(cost.shape[:2])}, got {tuple(colors.shape)}"
+        )
+
     cost_numpy = cost.detach().cpu().numpy()
+    colors_numpy = None if colors is None else colors.detach().cpu().numpy()
     available = os.cpu_count() or 1
     worker_count = max(1, min(int(workers or available), available, len(cost_numpy)))
 
-    def _solve_one(cost):
-        rows, columns = linear_sum_assignment(cost)
+    def _solve_one(item):
+        cost, item_colors = item
         permutation = np.empty(cost.shape[0], dtype=np.int64)
-        permutation[rows] = columns
+        if item_colors is None:
+            rows, columns = linear_sum_assignment(cost)
+            permutation[rows] = columns
+            return permutation
+
+        for color in np.unique(item_colors):
+            indices = np.flatnonzero(item_colors == color)
+            rows, columns = linear_sum_assignment(cost[np.ix_(indices, indices)])
+            permutation[indices[rows]] = indices[columns]
         return permutation
 
+    color_rows = [None] * len(cost_numpy) if colors_numpy is None else colors_numpy
+    items = list(zip(cost_numpy, color_rows))
     if worker_count == 1:
-        permutations = [_solve_one(item) for item in cost_numpy]
+        permutations = [_solve_one(item) for item in items]
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            permutations = list(executor.map(_solve_one, cost_numpy))
+            permutations = list(executor.map(_solve_one, items))
 
     return torch.from_numpy(np.stack(permutations)).to(cost.device)
 
@@ -89,6 +107,7 @@ def match(
     data,
     noise,
     method,
+    colors=None,
     *,
     epsilon=0.03,
     iterations=10,
@@ -101,13 +120,21 @@ def match(
     """Match noise to data and return it in data-row order.
 
     Inputs use the sampler's unit-variance `(x, y, scaled_angle)` coordinates.
-    `lsa` produces a true permutation. `argmax` anneals its Sinkhorn
-    temperature until row argmaxes cover every column, when possible.
-    `barycenter` returns the row-normalized soft Sinkhorn average.
+    Matching is restricted to tiles of the same color. If `colors` is None,
+    all tiles are treated as one color. `lsa` produces a true permutation.
+    `sinkhorn.argmax` anneals its Sinkhorn temperature until row argmaxes cover
+    every column, when possible. `sinkhorn.barycenter` returns the
+    row-normalized soft Sinkhorn average.
     """
     assert data.shape == noise.shape, f"data and noise must have the same shape, got {data.shape} and {noise.shape}"
     if method not in MATCH_METHODS:
         raise NotImplementedError(f"Unknown match method {method!r}; expected one of {MATCH_METHODS}")
+    if colors is not None and colors.shape != data.shape[:2]:
+        raise ValueError(
+            f"colors must have shape {tuple(data.shape[:2])}, got {tuple(colors.shape)}"
+        )
+    if colors is not None:
+        colors = colors.to(data.device)
     
     soft_permutation = None
     permutation = None
@@ -119,10 +146,13 @@ def match(
         cost = torch.cdist(data, noise)
 
     if method == "lsa":
-        permutation = lsa(cost, workers=lsa_workers)
+        permutation = lsa(cost, colors=colors, workers=lsa_workers)
         matched_noise = gather_noise(noise, permutation)
     else:
         logP = -cost / epsilon
+        if colors is not None:
+            same_color = colors.unsqueeze(2) == colors.unsqueeze(1)
+            logP = logP.masked_fill(~same_color, -torch.inf)
 
     if method == "sinkhorn.barycenter":
         soft_permutation = sinkhorn(logP, iterations).exp()
@@ -136,7 +166,7 @@ def match(
     
     if method == "sinkhorn.lsa":
         soft_permutation = sinkhorn(logP, iterations).exp()
-        permutation = lsa(-soft_permutation, workers=lsa_workers)
+        permutation = lsa(-soft_permutation, colors=colors, workers=lsa_workers)
         matched_noise = gather_noise(noise, permutation)
 
     if return_details:

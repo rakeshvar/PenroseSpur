@@ -51,7 +51,7 @@ def run_config(symmetry, num_tiles, copies):
         inness = b["inness"]
         inness_sum += inness.sum().item()
         min_inness_sum += inness.min(dim=1).values.sum().item()
-        full += (inness >= V1 - FULL_TOLERANCE).sum().item()
+        full += (inness >= 1.0 - FULL_TOLERANCE).sum().item()
         color1 += (b["colors"] == 1).sum().item()
         n_tiles += b["colors"].numel()
     elapsed = time.time() - t0
@@ -76,11 +76,10 @@ def run_config(symmetry, num_tiles, copies):
 
 
 def print_report(symmetry, rows):
-    V1 = 7 if symmetry == 6 else 5
     name = "Hexagons" if symmetry == 6 else "Penrose rhombuses"
     color = "dark" if symmetry == 6 else "thin"
     print(f"\n{'=' * 96}")
-    print(f"Symmetry {symmetry} ({name})   inness range 0..{V1}   "
+    print(f"Symmetry {symmetry} ({name})   inness range 0..1   "
           f"{rows[0]['total']} samples per N   color-1 = {color}")
     print(f"{'=' * 96}")
     header = (f"{'N':>4} {'M':>6} {'side':>6} {'x_mean':>8} {'y_mean':>8} "

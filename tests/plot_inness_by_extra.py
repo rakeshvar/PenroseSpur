@@ -141,13 +141,13 @@ def plot_symmetry(symmetry):
             labels,
             sampler.class_names,
             extra,
-            sampler.V1,
+            1.0,
             row + 1,
             col + 1,
         )
         del inness
 
-    fig.update_xaxes(title_text="inness", dtick=0.5)
+    fig.update_xaxes(title_text="inness", dtick=0.1)
     fig.update_yaxes(title_text="fraction of returned tiles")
     fig.update_layout(
         title=(

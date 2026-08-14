@@ -9,7 +9,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from match import MATCH_METHODS, match, sinkhorn, sinkhorn_argmax
+from match import MATCH_METHODS, match, sinkhorn, sinkhorn_annealed_argmax
 from sampler import SpurSampler, _scaled_angle
 
 
@@ -49,6 +49,7 @@ def test_scaled_sample_angles():
     sampler.device = torch.device("cpu")
     sampler.masks = torch.empty(1, 1, 1)
     sampler.M = sampler.num_ret_tiles = 4
+    sampler.V1 = 1
     sampler.rotation_mask = 0.
     sampler.angles = torch.tensor(
         [-4. * math.pi, -math.pi / 2., math.pi / 2., 4. * math.pi]
@@ -82,6 +83,29 @@ def test_scaled_sample_angles():
     )
 
 
+def test_inness_is_normalized():
+    sampler = SpurSampler.__new__(SpurSampler)
+    sampler.device = torch.device("cpu")
+    sampler.translation_cu = 0.0
+    sampler.rotation_canvas = 0.0
+    sampler.scaling = 1.0
+    sampler.H = sampler.W = 1
+    sampler.M, sampler.V1 = 2, 3
+    sampler.mask_flat = torch.ones(1, 1)
+    sampler.cvertices = torch.tensor(
+        [
+            [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]],
+        ]
+    )
+
+    _, _, inness = sampler.transform_and_inness(torch.tensor([0]))
+
+    assert torch.allclose(inness, torch.tensor([[1.0, 1.0 / 3.0]]))
+    assert inness.min() >= 0.0
+    assert inness.max() <= 1.0
+
+
 def assert_permutation(permutation):
     expected = torch.arange(permutation.shape[1], device=permutation.device)
     for row in permutation:
@@ -93,7 +117,10 @@ def test_sinkhorn_argmax_annealing():
     initial = sinkhorn(scores, iterations=100).argmax(dim=2)
     assert torch.unique(initial).numel() < scores.shape[1]
 
-    _, annealed = sinkhorn_argmax(scores, iterations=100, anneal_steps=8)
+    _, annealed, converged = sinkhorn_annealed_argmax(
+        scores, iterations=100, anneal_steps=8
+    )
+    assert converged
     assert_permutation(annealed)
 
 
@@ -112,13 +139,15 @@ def test_matching():
     assert exact.soft_permutation is None
     assert_permutation(exact.permutation)
 
-    argmax = match(data, noise, method="argmax", return_details=True)
+    argmax = match(data, noise, method="sinkhorn.argmax", return_details=True)
     assert argmax.matched_noise.shape == noise.shape
     assert argmax.permutation.shape == noise.shape[:2]
     assert argmax.soft_permutation is not None
     assert_permutation(argmax.permutation)
 
-    barycenter = match(data, noise, method="barycenter", return_details=True)
+    barycenter = match(
+        data, noise, method="sinkhorn.barycenter", return_details=True
+    )
     assert barycenter.matched_noise.shape == noise.shape
     assert barycenter.permutation is None
     assert barycenter.soft_permutation is not None
@@ -126,12 +155,42 @@ def test_matching():
     weights = weights / weights.sum(dim=2, keepdim=True)
     assert torch.allclose(weights.sum(dim=2), torch.ones_like(weights[..., 0]))
     assert torch.allclose(barycenter.matched_noise, torch.bmm(weights, noise))
-    assert MATCH_METHODS == ("lsa", "argmax", "barycenter")
+    assert MATCH_METHODS == (
+        "lsa",
+        "sinkhorn.argmax",
+        "sinkhorn.barycenter",
+        "sinkhorn.lsa",
+    )
+
+
+def test_color_constrained_matching():
+    noise = torch.tensor([[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]])
+    data = noise.flip(dims=(1,))
+    colors = torch.tensor([[0, 1]], dtype=torch.uint8)
+
+    unconstrained = match(data, noise, method="lsa", return_details=True)
+    assert torch.equal(unconstrained.matched_noise, data)
+    assert torch.equal(unconstrained.permutation, torch.tensor([[1, 0]]))
+
+    for method in MATCH_METHODS:
+        result = match(
+            data,
+            noise,
+            method=method,
+            colors=colors,
+            iterations=20,
+            return_details=True,
+        )
+        assert torch.allclose(result.matched_noise, noise)
+        if result.permutation is not None:
+            assert torch.equal(result.permutation, torch.tensor([[0, 1]]))
 
 
 if __name__ == "__main__":
     test_noise()
     test_scaled_sample_angles()
+    test_inness_is_normalized()
     test_sinkhorn_argmax_annealing()
     test_matching()
+    test_color_constrained_matching()
     print("noise and matching checks passed")

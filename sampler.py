@@ -6,7 +6,7 @@ then each batch is fully vectorized on the device:
   1. pick B masks, draw a rotation θ ~ U(-pi, pi) and a translation
      ~ U(-T, T)^2 (T = translation range in canvas units) per sample,
   2. rotate + translate all M canvas tiles (center + V vertices = V+1 inness points per tile),
-  3. map points to mask pixels and sum soft mask values -> inness 0..V+1,
+  3. map points to mask pixels and average soft mask values -> inness 0..1,
   4. add U(0, 1) noise to break ties, torch.topk to keep the best N tiles.
 
 Outputs per batch (all on device):
@@ -126,7 +126,7 @@ class SpurSampler:
                             flatpxxy.view(B, -1)).view(B, self.M, self.V1)
 
         in_bounds = (pxlxs >= 0) & (pxlxs < self.H) & (pxlys >= 0) & (pxlys < self.W)
-        inness = (vals * in_bounds).sum(-1)                                                   # (B, M) in 0..V+1
+        inness = (vals * in_bounds).sum(-1) / self.V1                                         # (B, M) in 0..1
 
         return cvertices, θ, inness
 
@@ -148,7 +148,9 @@ class SpurSampler:
         #---------------------------------
         # Top-N with random tie-breaking
         #---------------------------------
-        noisy = inness.float() + 1e-3 * torch.rand(B, self.M, device=dev, generator=generator)
+        noisy = inness.float() + 1e-3 * torch.rand(
+            B, self.M, device=dev, generator=generator
+        )
         top = torch.topk(noisy, self.num_ret_tiles, dim=1).indices                # (B, N)
 
         #---------------------------------
