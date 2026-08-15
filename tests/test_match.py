@@ -67,6 +67,8 @@ def test_scaled_sample_angles():
     batch = sampler.sample_batch(2, mask_idx=torch.zeros(2, dtype=torch.long), return_vertices=True)
     assert batch["xya"][..., 2].abs().max() <= math.sqrt(3.) + 1e-6
     assert torch.allclose(batch["xya"][..., :2].mean(dim=1), torch.zeros(2, 2), atol=1e-7)
+    expected_x = torch.tensor([-1.5, -0.5, 0.5, 1.5])
+    assert torch.allclose(batch["xya"][0, :, 0].sort().values, expected_x)
     assert torch.allclose(batch["vertices"].mean(dim=(1, 2)), torch.zeros(2, 2), atol=1e-7)
     assert batch["vertex_in"].shape == (2, 4, 1)
     assert batch["vertex_in"].dtype == torch.bool

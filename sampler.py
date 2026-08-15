@@ -188,8 +188,7 @@ class SpurSampler:
         #---------------------------------
         # Return outputs
         #---------------------------------
-        xya = torch.cat([xy, ang[..., None]], dim=-1)
-        xya = _scaled_angle(xya)
+        xya = torch.cat([xy, _scaled_angle(ang)[..., None]], dim=-1)
         inness = torch.gather(inness, 1, top)                           
         vertex_in = torch.gather(vertex_in, 1, top[..., None].expand(-1, -1, self.V1))
         out = {
