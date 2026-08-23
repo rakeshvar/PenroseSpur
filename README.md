@@ -85,6 +85,28 @@ angles are uniform on `[-sqrt(3), sqrt(3)]`.
 `sample_noise` uses unit-scale Gaussian XY coordinates, `N(0, I)`, with no
 distribution or radius override.
 
+## Lattice loss
+
+`lattice_loss.py` provides a color-aware nearest-neighbour metric for batched
+XY or XYA tensors:
+
+```python
+from lattice_loss import lattice_loss
+
+loss = lattice_loss(symmetry, side, xya, colors)
+```
+
+For every tile, the loss finds its nearest centre and assigns the exact target
+distance from the pair's colors. Hexagons always target `sqrt(3) * side`.
+Penrose targets are `sin(2*pi/5) * side` for thick/thick (`0/0`),
+`sin(pi/5) * side` for thin/thin (`1/1`), and `sin(3*pi/10) * side` for a
+mixed pair.
+
+The default `multiplicative` error uses `r = d/d*`, `epsilon = 1/side`, and
+`max(r, (1 + epsilon)/(r + epsilon)) - 1`. Set `algo="quadratic"` for
+`MSE(d, d*)`, or `algo="logarithmic"` for the Itakura-Saito form
+`r - log(r) - 1`. All modes return the mean over tiles and batches.
+
 ## Matching
 
 `match.py` matches noise rows to sampled data with exact LSA or GPU-native
@@ -122,6 +144,7 @@ python tests/check_stats.py [copies]  # full stats sweep over N; findings in tes
 - `masks.py` — builds the mask tensor in memory
 - `canvas.py` — builds mother canvas tensors in memory
 - `sampler.py` — `SpurSampler`, the on-the-fly batch generator
+- `lattice_loss.py` — color-aware nearest-neighbour lattice metrics
 - `match.py` — exact LSA and Sinkhorn-based noise matching
 - `tests/show_masks.py`, `tests/show_samples.py`, `tests/show_canvas.py`,
   `tests/show_inness.py` — visual sanity checks (output in `tests/output/`)
