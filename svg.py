@@ -65,10 +65,24 @@ def save_polygons(
     stroke="#222",
     show_arcs=False,
     radius=None,
+    opacities=None,
+    show_polygons=True,
+    alpha=1.0,
 ):
     """Save polygon vertices and categorical colors as a standalone SVG."""
     polygons = _as_numpy(polygons)
     colors = _as_numpy(colors)
+    if opacities is None:
+        opacities = np.ones(len(polygons), dtype=float)
+    else:
+        opacities = np.clip(_as_numpy(opacities).astype(float), 0.0, 1.0)
+        if opacities.shape != (len(polygons),):
+            raise ValueError(
+                f"Expected {len(polygons)} opacities, got {opacities.shape}"
+            )
+    alpha = float(alpha)
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError(f"alpha must be in [0,1], got {alpha}")
     symmetry = {4: 5, 6: 6}[polygons.shape[1]]
 
     if palette is None:
@@ -101,7 +115,8 @@ def save_polygons(
         arc_stroke_width = stroke_width * 3
         arc_styles = (
             f".arc {{ fill: none; stroke-width: {arc_stroke_width:.4f}; "
-            "stroke-opacity: 0.8; vector-effect: non-scaling-stroke; }"
+            f"stroke-opacity: {0.8 * alpha:.4f}; "
+            "vector-effect: non-scaling-stroke; }"
             f"\n.aarc {{ stroke: {escape(palette.aarccolor)}; }}"
             f"\n.carc {{ stroke: {escape(palette.carccolor)}; }}"
         )
@@ -119,13 +134,15 @@ def save_polygons(
         f'width="{view_width:.3f}" height="{view_height:.3f}" '
         f'fill="{escape(background)}"/>',
     ]
-    for vertices, color in zip(polygons, colors):
+    for vertices, color, opacity in zip(polygons, colors, opacities):
         x = vertices[:, 0]
         y = -vertices[:, 1]
         points = " ".join(f"{px:.2f},{py:.2f}" for px, py in zip(x, y))
-        elements.append(
-            f'<polygon class="tile color{int(color)}" points="{points}"/>'
-        )
+        if show_polygons:
+            elements.append(
+                f'<polygon class="tile color{int(color)}" '
+                f'opacity="{opacity * alpha:.4f}" points="{points}"/>'
+            )
         if show_arcs:
             A, B, C, D = vertices
             for arc, arc_class in (
