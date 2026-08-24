@@ -176,7 +176,7 @@ def _paths_with_breaks(paths):
 
 def _threshold_alpha(metric, kmax):
     """Map the selected metric's kmax cutoff to low/high opacity."""
-    return np.where(metric <= kmax, 0.15, 0.75)
+    return np.where(metric > kmax, 0.15, 0.75)
 
 
 def build_figure(
