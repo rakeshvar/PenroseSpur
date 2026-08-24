@@ -68,6 +68,22 @@ batch["vertex_in"] # (64, 96, V+1) thresholded center/vertex mask probes
 noise = sampler.sample_noise(64)  # N(0, I) positions
 ```
 
+Set `num_cool_classes` to sample only from a prefix of the 30-class preference
+list in `cool_classes.py`:
+
+```python
+sampler = SpurSampler(5, 96, num_cool_classes=10)
+sampler.num_cool_classes  # 10
+sampler.cool_class_ids    # exact resolved MPEG7 IDs, in preference order
+```
+
+The default `num_cool_classes=None` uses all 70 classes. Filtered batches retain
+the original MPEG7 label IDs rather than remapping them. Slim-project configs
+should save both `spur.num_cool_classes` and `spur.cool_class_ids`; pass both
+back to `SpurSampler` when restoring so a later change to the global preference
+list cannot change an existing run's mask pool. Explicit `cool_class_ids` are
+authoritative, and `num_cool_classes` must match their length.
+
 Pass `mask_idx` to `sample_batch` for class-conditioned sampling, and
 `return_vertices=True` to also get the polygon vertices `(B, N, V, 2)` for
 rendering. `transform_and_inness(mask_idx)` exposes the per-tile soft inness and
@@ -142,6 +158,7 @@ python tests/check_stats.py [copies]  # full stats sweep over N; findings in tes
 ## Files
 
 - `masks.py` — builds the mask tensor in memory
+- `cool_classes.py` — ordered preferred MPEG7 class IDs and names
 - `canvas.py` — builds mother canvas tensors in memory
 - `sampler.py` — `SpurSampler`, the on-the-fly batch generator
 - `lattice_loss.py` — color-aware nearest-neighbour lattice metrics

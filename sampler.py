@@ -25,6 +25,7 @@ import math
 import torch
 
 from canvas import build_canvas_for_mask
+from cool_classes import resolve_cool_classes, validate_cool_classes
 from masks import build_masks
 
 
@@ -35,6 +36,17 @@ def _scaled_angle(angle):
     """Wrap radians to [-pi, pi), then scale to unit variance."""
     wrapped = torch.remainder(angle + math.pi, 2. * math.pi) - math.pi
     return wrapped * ANGLE_SCALE
+
+
+def _cool_mask_indices(labels, inclass_ids, class_ids):
+    """Return mask indices grouped by class preference, then in-class ID."""
+    chunks = []
+    for class_id in class_ids:
+        members = torch.nonzero(labels == class_id, as_tuple=True)[0]
+        if len(members) == 0:
+            raise ValueError(f"No masks found for cool class ID {class_id}")
+        chunks.append(members[torch.argsort(inclass_ids[members])])
+    return torch.cat(chunks)
 
 
 class SpurSampler:
@@ -48,6 +60,8 @@ class SpurSampler:
         device=None,
         rotation_canvas=math.pi,
         rotation_mask=math.pi/4,
+        num_cool_classes=None,
+        cool_class_ids=None,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -56,7 +70,22 @@ class SpurSampler:
         self.rotation_canvas = float(rotation_canvas)
         self.rotation_mask = float(rotation_mask)
 
+        self.num_cool_classes, self.cool_class_ids = resolve_cool_classes(
+            num_cool_classes,
+            cool_class_ids,
+        )
+
         masks_data = build_masks()
+        if self.cool_class_ids is not None:
+            validate_cool_classes(masks_data["class_names"])
+            keep = _cool_mask_indices(
+                masks_data["labels"],
+                masks_data["inclass_ids"],
+                self.cool_class_ids,
+            )
+            for key in ("masks", "labels", "inclass_ids"):
+                masks_data[key] = masks_data[key][keep]
+
         mask_hw = tuple(masks_data["masks"].shape[1:])
         canvas_data = build_canvas_for_mask(
             symmetry,
@@ -68,8 +97,8 @@ class SpurSampler:
             return_indices=True,
         )
 
-        self.masks = masks_data["masks"].to(self.device)          # (1400, H, W) float32
-        self.labels = masks_data["labels"].to(self.device)        # (1400,)
+        self.masks = masks_data["masks"].to(self.device)          # (K, H, W) float32
+        self.labels = masks_data["labels"].to(self.device)        # (K,)
         self.inclass_ids = masks_data["inclass_ids"].to(self.device)
         self.class_names = masks_data["class_names"]
         
