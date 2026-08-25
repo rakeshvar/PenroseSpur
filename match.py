@@ -2,16 +2,15 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-import math
 import os
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 import torch
 
+from flow_geometry import pairwise_xya_distance
 
 MATCH_METHODS = ("lsa", "sinkhorn.argmax", "sinkhorn.barycenter", "sinkhorn.lsa")
-SCALED_ANGLE_PERIOD = 2.0 * math.sqrt(3.0)
 
 
 @dataclass
@@ -142,14 +141,7 @@ def match(
     permutation = None
     converged = True
 
-    xy_cost_sq = torch.cdist(data[..., :2], noise[..., :2]).square()
-    angle_delta = data[..., 2, None] - noise[:, None, :, 2]
-    angle_delta = torch.remainder(
-        angle_delta + SCALED_ANGLE_PERIOD / 2.0,
-        SCALED_ANGLE_PERIOD,
-    ) - SCALED_ANGLE_PERIOD / 2.0
-    cost_sq = xy_cost_sq + angle_delta.square()
-    cost = cost_sq if squared else cost_sq.sqrt()
+    cost = pairwise_xya_distance(data, noise, squared=squared)
 
     if method == "lsa":
         permutation = lsa(cost, colors=colors, workers=lsa_workers)
