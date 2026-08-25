@@ -138,6 +138,16 @@ def test_matching():
     assert MATCH_METHODS == ("lsa", "sinkhorn.argmax", "sinkhorn.barycenter", "sinkhorn.lsa")
 
 
+def test_matching_uses_circular_angle_distance():
+    angle_limit = math.sqrt(3.0)
+    data = torch.tensor([[[0.0, 0.0, -angle_limit + 0.02], [0.0, 0.0, 0.0]]])
+    noise = torch.tensor([[[0.0, 0.0, angle_limit - 0.02], [0.0, 0.0, 0.0]]])
+
+    for squared in (True, False):
+        result = match(data, noise, method="lsa", squared=squared, return_details=True)
+        assert torch.equal(result.permutation, torch.tensor([[0, 1]]))
+
+
 def test_color_constrained_matching():
     noise = torch.tensor([[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]])
     data = noise.flip(dims=(1,))
@@ -160,5 +170,6 @@ if __name__ == "__main__":
     test_inness_is_normalized()
     test_sinkhorn_argmax_annealing()
     test_matching()
+    test_matching_uses_circular_angle_distance()
     test_color_constrained_matching()
     print("noise and matching checks passed")

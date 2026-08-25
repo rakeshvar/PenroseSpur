@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import math
 import os
 
 import numpy as np
@@ -10,6 +11,7 @@ import torch
 
 
 MATCH_METHODS = ("lsa", "sinkhorn.argmax", "sinkhorn.barycenter", "sinkhorn.lsa")
+SCALED_ANGLE_PERIOD = 2.0 * math.sqrt(3.0)
 
 
 @dataclass
@@ -140,10 +142,14 @@ def match(
     permutation = None
     converged = True
 
-    if squared: 
-        cost = torch.cdist(data, noise).square()
-    else:
-        cost = torch.cdist(data, noise)
+    xy_cost_sq = torch.cdist(data[..., :2], noise[..., :2]).square()
+    angle_delta = data[..., 2, None] - noise[:, None, :, 2]
+    angle_delta = torch.remainder(
+        angle_delta + SCALED_ANGLE_PERIOD / 2.0,
+        SCALED_ANGLE_PERIOD,
+    ) - SCALED_ANGLE_PERIOD / 2.0
+    cost_sq = xy_cost_sq + angle_delta.square()
+    cost = cost_sq if squared else cost_sq.sqrt()
 
     if method == "lsa":
         permutation = lsa(cost, colors=colors, workers=lsa_workers)
