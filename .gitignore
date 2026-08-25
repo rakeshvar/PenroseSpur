@@ -5,6 +5,8 @@ __pycache__/
 # Generated diagnostics and visualizations
 tests/output/
 tests/debruijn/*.svg
+debruijn/output/
+debruijn/visual/
 
 # Generated sampler statistics databases
 inness_data/
