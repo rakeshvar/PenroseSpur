@@ -145,6 +145,149 @@ barycenters = match(
 `barycenter` returns a row-normalized soft weighted average rather than a
 permutation. Sinkhorn defaults to epsilon `0.03` and 10 iterations.
 
+## SVG and MP4 rendering
+
+The `show/` package is the shared renderer for PenroseSpur and its consumers.
+It is intentionally separate from sampling, matching, losses, and tile
+mathematics. Import stable APIs from the facade:
+
+```python
+from show import (
+    AssignmentStyle,
+    ComparisonLayer,
+    LayerStyle,
+    VideoOptions,
+    save_mp4,
+    save_scene_svg,
+    save_tiles_svg,
+    xya_shared_viewbox,
+)
+```
+
+Render raw-radian XYA values or a batched Spur sample. Spur stores angles scaled
+by `ANGLE_SCALE = sqrt(3) / pi`, so pass that value explicitly:
+
+The XY channels retain the sampler's mask-aligned canvas convention: the first
+coordinate maps to image row and the second to image column. SVG presentation
+therefore maps canvas `(x, y)` to SVG `(y, x)`, matching source-mask orientation
+and legacy PenroseDiffusion output. Rendering does not reorder the stored model
+tensor or change its angle convention.
+
+```python
+save_tiles_svg(
+    "sample.svg",
+    batch["xya"],
+    batch["colors"],
+    symmetry=sampler.symmetry,
+    side=sampler.side,
+    angle_scale=ANGLE_SCALE,
+    scheme="ocean",
+    show_arcs=sampler.symmetry == 5,
+    opacities=batch["inness"][0],
+)
+```
+
+`save_tiles_svg` also accepts unbatched `(N,3)` XYA and `(N,)` colors. For
+already constructed `(N,4,2)` Penrose or `(N,6,2)` hex polygons, use
+`save_polygons`. Both routes support a named scheme, custom `ColorScheme`,
+background/stroke overrides, alpha, per-tile opacity, radius and duplicate
+markers, fixed view boxes, and standalone SVG strings. Every built-in scheme
+renders tile fills at `alpha=0.7` by default; pass an explicit `alpha` to
+override it.
+
+Build error or assignment scenes from any number of fill/outline layers:
+
+```python
+layers = [
+    ComparisonLayer(target, colors, "target", LayerStyle("fill_outline")),
+    ComparisonLayer(
+        prediction,
+        colors,
+        "prediction",
+        LayerStyle("outline", color_role="aux"),
+    ),
+]
+save_scene_svg(
+    "error.svg",
+    layers,
+    symmetry=6,
+    side=side,
+    assignments=[(1, 0, None, AssignmentStyle("error", arrows=True))],
+    metrics={"mean displacement": displacement},
+)
+```
+
+For stable animation frames, calculate one view box across the trajectory and
+reuse it in every SVG. `save_mp4` normalizes the canvases, preserves
+non-scaling stroke appearance, rasterizes ordered SVG frames, and writes H.264
+with `yuv420p` and `faststart`:
+
+```python
+viewbox = xya_shared_viewbox(
+    trajectory, colors, symmetry, side, angle_scale=ANGLE_SCALE
+)
+for index, state in enumerate(trajectory):
+    save_tiles_svg(
+        f"frames/frame_{index:04d}.svg",
+        state,
+        colors,
+        symmetry=symmetry,
+        side=side,
+        angle_scale=ANGLE_SCALE,
+        viewbox=viewbox,
+    )
+save_mp4(
+    sorted(Path("frames").glob("frame_*.svg")),
+    "trajectory.mp4",
+    options=VideoOptions(fps=30),
+    viewbox=viewbox,
+)
+```
+
+To turn unevenly spaced trajectory keyframes into a smooth, fixed-duration
+video, use `save_trajectory_mp4`:
+
+```python
+save_trajectory_mp4(
+    xya_trajectory,
+    colors,
+    "smooth.mp4",
+    kind="xya",
+    symmetry=symmetry,
+    side=side,
+    angle_scale=ANGLE_SCALE,
+    target_duration=10.0,
+)
+
+save_trajectory_mp4(
+    polygon_trajectory,
+    colors,
+    "smooth-polygons.mp4",
+    kind="polygons",
+    target_duration=10.0,
+)
+```
+
+The default rate is 30 FPS. XYA timing uses the mean per-tile movement
+`hypot(dx, dy) + abs(wrapped_angle_delta)` and interpolates angles along the
+shortest wrapped path. Polygon timing uses RMS vertex displacement and
+interpolates corresponding vertices directly. Cumulative movement determines
+how many output frames each source interval receives, so distant keyframes
+take proportionally longer than nearby ones. Per-keyframe opacity arrays are
+interpolated on the same schedule. Without `target_duration`, each trajectory
+keyframe remains one output video frame for compatibility.
+
+MP4 creation requires `ffmpeg` on `PATH`; SVG rendering requires only NumPy and
+the standard library. Available styles are listed by `scheme_names(5)` and
+`scheme_names(6)`. Render all twelve built-ins with:
+
+```bash
+~/.aivenv/bin/python tests/show_gallery.py
+```
+
+Generated SVG/MP4/HTML files remain local artifacts and are not logged to
+WandB.
+
 ## Sanity checks and reports
 
 ```bash
