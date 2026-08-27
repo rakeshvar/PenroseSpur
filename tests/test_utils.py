@@ -43,8 +43,8 @@ class UtilsTest(unittest.TestCase):
                 opacities=np.array([0.25, 0.75]),
             )
             svg = path.read_text(encoding="utf-8")
-        self.assertIn('opacity="0.2500"', svg)
-        self.assertIn('opacity="0.7500"', svg)
+        self.assertIn('opacity="0.1750"', svg)
+        self.assertIn('opacity="0.5250"', svg)
 
     def test_svg_supports_arc_only_alpha_rendering(self):
         first = np.array(

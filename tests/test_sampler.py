@@ -46,7 +46,16 @@ def fake_masks():
     }
 
 
+def fake_metadata():
+    data = fake_masks()
+    return {
+        key: data[key]
+        for key in ("labels", "inclass_ids", "class_names")
+    }
+
+
 def fake_canvas(symmetry, num_tiles, mask_hw, target_on, translation, **kwargs):
+    vertices_per_tile = 6 if symmetry == 6 else 4
     return {
         "symmetry": symmetry,
         "num_tiles": num_tiles,
@@ -54,7 +63,7 @@ def fake_canvas(symmetry, num_tiles, mask_hw, target_on, translation, **kwargs):
         "scaling": 1.0,
         "translation": translation,
         "centers": torch.zeros(num_tiles, 2),
-        "vertices": torch.zeros(num_tiles, 4, 2),
+        "vertices": torch.zeros(num_tiles, vertices_per_tile, 2),
         "angles": torch.zeros(num_tiles),
         "colors": torch.zeros(num_tiles, dtype=torch.uint8),
         "indices": torch.arange(num_tiles),
@@ -63,16 +72,26 @@ def fake_canvas(symmetry, num_tiles, mask_hw, target_on, translation, **kwargs):
 
 class CoolClassSamplerTest(unittest.TestCase):
     def setUp(self):
-        masks_patch = patch.object(sampler_module, "build_masks", fake_masks)
+        metadata_patch = patch.object(
+            sampler_module,
+            "load_mask_metadata",
+            side_effect=fake_metadata,
+        )
+        masks_patch = patch.object(
+            sampler_module,
+            "build_masks",
+            side_effect=fake_masks,
+        )
         canvas_patch = patch.object(
             sampler_module,
             "build_canvas_for_mask",
-            fake_canvas,
+            side_effect=fake_canvas,
         )
-        masks_patch.start()
-        canvas_patch.start()
-        self.addCleanup(masks_patch.stop)
-        self.addCleanup(canvas_patch.stop)
+        self.load_metadata = metadata_patch.start()
+        self.build_masks = masks_patch.start()
+        self.build_canvas = canvas_patch.start()
+        for active_patch in (metadata_patch, masks_patch, canvas_patch):
+            self.addCleanup(active_patch.stop)
 
     def test_cool_class_ranking_matches_requested_order(self):
         self.assertEqual(COOL_CLASS_IDS, EXPECTED_COOL_CLASS_IDS)
@@ -118,6 +137,55 @@ class CoolClassSamplerTest(unittest.TestCase):
             sampler.labels.tolist(),
             torch.arange(70).repeat_interleave(20).tolist(),
         )
+
+    def test_construction_and_noise_do_not_decode_masks(self):
+        sampler = SpurSampler(6, 2, device="cpu")
+
+        self.assertFalse(sampler._data_ready)
+        self.assertEqual(sampler.V1, 7)
+        self.assertEqual(sampler.side, sampler_module.target_side_for_unit_var(6, 2))
+        self.assertEqual(sampler.sample_noise(3).shape, (3, 2, 3))
+        self.build_masks.assert_not_called()
+        self.build_canvas.assert_not_called()
+
+    def test_first_data_access_loads_once(self):
+        sampler = SpurSampler(6, 2, device="cpu")
+
+        self.assertEqual(tuple(sampler.masks.shape), (1400, 2, 2))
+        self.assertTrue(sampler._data_ready)
+        self.assertIs(sampler.warmup(), sampler)
+        sampler.sample_batch(1)
+        self.build_masks.assert_called_once_with()
+        self.build_canvas.assert_called_once()
+
+    def test_seeded_data_sampling_remains_deterministic(self):
+        first = SpurSampler(6, 2, device="cpu")
+        second = SpurSampler(6, 2, device="cpu")
+        first_batch = first.sample_batch(
+            3,
+            generator=torch.Generator().manual_seed(17),
+        )
+        second_batch = second.sample_batch(
+            3,
+            generator=torch.Generator().manual_seed(17),
+        )
+
+        for key in first_batch:
+            self.assertTrue(torch.equal(first_batch[key], second_batch[key]), key)
+
+    def test_cool_subset_preserves_metadata_and_mask_order(self):
+        sampler = SpurSampler(
+            6,
+            2,
+            device="cpu",
+            cool_class_ids=(68, 0, 47),
+        )
+
+        expected_labels = [68] * 20 + [0] * 20 + [47] * 20
+        self.assertEqual(sampler.labels.tolist(), expected_labels)
+        self.assertEqual(len(sampler), 60)
+        self.assertEqual(len(sampler.masks), 60)
+        self.assertEqual(sampler.labels.tolist(), expected_labels)
 
     def test_saved_cool_class_ids_are_authoritative(self):
         saved_ids = (68, 0, 47)

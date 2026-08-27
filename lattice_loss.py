@@ -1,4 +1,4 @@
-"""Color-aware nearest-neighbour lattice losses."""
+"""Position and orientation losses for scaled ``(x, y, angle)`` lattices."""
 
 import math
 
@@ -6,19 +6,24 @@ import torch
 
 
 _ALGORITHMS = ("quadratic", "logarithmic", "multiplicative")
+_ANGLE_LOSS_SCALE = 0.1
 
 
-def _validate_inputs(symmetry, side, xya, colors):
+def _validate_geometry(symmetry, xya):
     if symmetry not in (5, 6):
         raise ValueError(f"Unsupported symmetry: {symmetry} (must be 5 or 6)")
     if not isinstance(xya, torch.Tensor):
         raise TypeError("xya must be a torch.Tensor")
     if not xya.is_floating_point():
         raise TypeError("xya must have a floating-point dtype")
-    if xya.ndim != 3 or xya.shape[-1] < 2:
-        raise ValueError(f"Expected xya with shape (B, N, D>=2), got {tuple(xya.shape)}")
+    if xya.ndim != 3 or xya.shape[-1] < 3:
+        raise ValueError(f"Expected xya with shape (B, N, D>=3), got {tuple(xya.shape)}")
     if xya.shape[1] < 2:
         raise ValueError("Lattice loss requires at least two tiles")
+
+
+def _validate_inputs(symmetry, side, xya, colors):
+    _validate_geometry(symmetry, xya)
 
     side_tensor = torch.as_tensor(side, dtype=xya.dtype, device=xya.device)
     if side_tensor.ndim != 0:
@@ -71,13 +76,13 @@ def _target_distances(symmetry, side, colors, nearest_indices):
     return target_factor * side
 
 
-def lattice_loss(symmetry, side, xya, colors, algo="multiplicative"):
-    """Return mean error between actual and color-aware target NN distances.
+def lattice_loss_xy(symmetry, side, xya, colors, algo="multiplicative"):
+    """Return mean color-aware nearest-neighbour distance error.
 
     Args:
         symmetry: 6 for hexagons or 5 for Penrose rhombuses.
         side: Polygon side length.
-        xya: Batched tile geometry shaped ``(B, N, D>=2)``. Only XY is used.
+        xya: Batched scaled geometry shaped ``(B, N, D>=3)``.
         colors: Tile colors shaped ``(B, N)``. Ignored for symmetry 6.
         algo: ``quadratic``, ``logarithmic``, or ``multiplicative``.
     """
@@ -104,3 +109,35 @@ def lattice_loss(symmetry, side, xya, colors, algo="multiplicative"):
     epsilon = 1.0 / side_tensor
     reciprocal_ratio = (1.0 + epsilon) / (ratio + epsilon)
     return (torch.maximum(ratio, reciprocal_ratio) - 1.0).mean()
+
+
+def _angle_losses(symmetry, xya):
+    _validate_geometry(symmetry, xya)
+    harmonic = 6 if symmetry == 6 else 10
+    radians = xya[..., 2] * (math.pi / math.sqrt(3.0))
+    phase = harmonic * radians
+    mean_cosine = phase.cos().mean(dim=1)
+    mean_sine = phase.sin().mean(dim=1)
+    resultant_squared = mean_cosine.square() + mean_sine.square()
+    concentration_loss = (1.0 - resultant_squared).clamp(0.0, 1.0)
+    return _ANGLE_LOSS_SCALE * concentration_loss
+
+
+def lattice_loss_angle(symmetry, xya):
+    """Return the mean loss of the symmetry-fold orientation concentration.
+
+    Angles are scaled from radians by ``sqrt(3) / pi``. Hexagons use their
+    six-fold rotational symmetry, while Penrose rhombus orientations occupy
+    ten directions separated by ``pi / 5``. The loss is zero for a perfect
+    common orientation coset and approaches ``0.1`` as those harmonic phases
+    disperse. This default scale makes its magnitude comparable to the
+    multiplicative XY loss.
+    """
+    return _angle_losses(symmetry, xya).mean()
+
+
+def lattice_loss(symmetry, side, xya, colors, algo="multiplicative"):
+    """Return the sum of position and orientation lattice losses."""
+    return lattice_loss_xy(symmetry, side, xya, colors, algo) + lattice_loss_angle(
+        symmetry, xya
+    )

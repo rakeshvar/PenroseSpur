@@ -1,8 +1,8 @@
 # Sampler statistics
 
-Run date: `2026-08-14`
+Run date: `2026-08-27`
 
-Command: `~/.aivenv/bin/python tests/check_stats.py 10`
+Command: `~/.aivenv/bin/python tests/check_stats.py`
 
 Generated with `10` copies of each of the 1,400 masks (14,000 samples per configuration), translation `2.0` polygon sides, canvas seed `0`, and `VAR_PER_AREA = 0.1463`.
 
@@ -12,23 +12,23 @@ Column key: `N` is returned tiles, `M` is canvas tiles, `side` is polygon side l
 
 | N | M | side | x mean | y mean | x std | y std | inness | % full | min inness | % color 1 | samples/s | time (s) |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 64 | 847 | 0.2028 | -0.0000 | -0.0000 | 0.9642 | 1.0260 | 0.8509 | 51.37 | 0.4797 | 33.33 | 1410.1 | 9.9 |
-| 96 | 1213 | 0.1655 | +0.0000 | -0.0000 | 0.9678 | 1.0352 | 0.8713 | 57.41 | 0.4816 | 33.31 | 1209.3 | 11.6 |
-| 128 | 1573 | 0.1434 | -0.0000 | -0.0000 | 0.9738 | 1.0365 | 0.8839 | 61.22 | 0.4819 | 33.32 | 913.8 | 15.3 |
+| 64 | 847 | 0.2028 | -0.0000 | -0.0000 | 0.9647 | 1.0247 | 0.8512 | 51.48 | 0.4795 | 33.34 | 759.3 | 18.4 |
+| 96 | 1213 | 0.1655 | -0.0000 | +0.0000 | 0.9691 | 1.0337 | 0.8713 | 57.39 | 0.4821 | 33.35 | 1193.7 | 11.7 |
+| 128 | 1573 | 0.1434 | +0.0000 | +0.0000 | 0.9722 | 1.0383 | 0.8839 | 61.25 | 0.4819 | 33.32 | 855.0 | 16.4 |
 
 ## Symmetry 5: Penrose rhombuses
 
 | N | M | side | x mean | y mean | x std | y std | inness | % full | min inness | % color 1 | samples/s | time (s) |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 64 | 970 | 0.3626 | +0.0000 | -0.0000 | 0.9657 | 1.0249 | 0.8392 | 47.05 | 0.4725 | 37.82 | 1628.0 | 8.6 |
-| 96 | 1354 | 0.2961 | +0.0000 | -0.0000 | 0.9688 | 1.0330 | 0.8612 | 53.35 | 0.4786 | 38.18 | 1241.7 | 11.3 |
-| 128 | 1727 | 0.2564 | -0.0000 | +0.0000 | 0.9763 | 1.0319 | 0.8750 | 57.50 | 0.4828 | 38.36 | 1075.5 | 13.0 |
+| 64 | 970 | 0.3626 | +0.0000 | -0.0000 | 0.9663 | 1.0251 | 0.8388 | 46.93 | 0.4716 | 37.76 | 370.5 | 37.8 |
+| 96 | 1354 | 0.2961 | -0.0000 | -0.0000 | 0.9701 | 1.0318 | 0.8610 | 53.30 | 0.4785 | 38.17 | 579.6 | 24.2 |
+| 128 | 1727 | 0.2564 | +0.0000 | +0.0000 | 0.9734 | 1.0349 | 0.8751 | 57.51 | 0.4825 | 38.36 | 479.6 | 29.2 |
 
 ## Findings
 
 1. Per-sample centering remains effective: every aggregate `x mean` and `y mean` rounds to `0.0000`, with only signed floating-point residuals.
-2. The `x std + y std` sums are 1.9902, 2.0030, and 2.0103 for hexagons and 1.9906, 2.0018, and 2.0082 for Penrose rhombuses at N=64, 96, and 128 respectively. The full range is 1.9902–2.0103, or -0.49% to +0.52% relative to 2.00, so all configurations satisfy the approximately 1% calibration target.
+2. The `x std + y std` sums are 1.9894, 2.0028, and 2.0105 for hexagons and 1.9914, 2.0019, and 2.0083 for Penrose rhombuses at N=64, 96, and 128 respectively. The full range is 1.9894–2.0105, or -0.53% to +0.53% relative to 2.00, so all configurations satisfy the approximately 1% calibration target.
 3. Calibration retains a small upward trend with N for both symmetries, crossing 2.00 near N=96, but the full drift remains within the target band. No rescaling is indicated.
-4. Color fractions meet their targets: hexagons are 33.31–33.33% dark (target 33.33%), and Penrose rhombuses are 37.82–38.36% thin (target 38.20%).
-5. Mean per-sample minimum normalized inness remains well above zero (0.4797–0.4819 for hexagons and 0.4725–0.4828 for Penrose rhombuses), with no evidence of garbage tiles. `% full` rises monotonically with N for both symmetries.
-6. Throughput declines with canvas size as expected, but this run is 20–31% slower than the preceding report across the six configurations. Rates are 914–1,410 samples/s for hexagons and 1,076–1,628 samples/s for Penrose rhombuses; because the XY-only fix does not add meaningful work, the broad slowdown is more consistent with host/runtime variability than with a sampler algorithm regression.
+4. Color fractions meet their targets: hexagons are 33.32–33.35% dark (target 33.33%), and Penrose rhombuses are 37.76–38.36% thin (target 38.20%).
+5. Mean per-sample minimum normalized inness remains well above zero (0.4795–0.4821 for hexagons and 0.4716–0.4825 for Penrose rhombuses), with no evidence of garbage tiles. `% full` rises monotonically with N for both symmetries.
+6. Throughput is substantially lower than the preceding report in five configurations and roughly unchanged for hexagons at N=96. Rates are 759–1,194 samples/s for hexagons and 371–580 samples/s for Penrose rhombuses; Penrose throughput is 53–77% lower than the preceding run, so the regression is anomalous, though a single CPU run cannot distinguish host/runtime variability from a code regression.

@@ -12,7 +12,9 @@ def get_colors(symmetry, num_tiles, device=None):
     """Return canonical tile colors (0 = light/thick, 1 = dark/thin).
 
     Hex tilings contain 2/3 light tiles. Penrose tilings contain 1/phi thick
-    ("light") tiles. The light count is rounded to the nearest integer.
+    ("light") tiles. The light count is rounded to the nearest integer. These
+    canonical counts are mask-independent; sample_batch colors are selected
+    from canvas tiles according to mask inness.
     """
     if isinstance(num_tiles, bool) or not isinstance(num_tiles, int):
         raise TypeError("num_tiles must be an integer")

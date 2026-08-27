@@ -1,8 +1,8 @@
 """
 On-the-fly sample generation.
 
-Builds the mask tensor and mother canvas once; 
-then each batch is fully vectorized on the device:
+Builds the mask tensor and mother canvas on the first data request; noise-only
+sampling stays lightweight. After loading, each batch is fully vectorized:
   1. pick B masks, draw a rotation θ ~ U(-pi, pi) and a translation
      ~ U(-T, T)^2 (T = translation range in canvas units) per sample,
   2. rotate + translate all M canvas tiles (center + V vertices = V+1 inness points per tile),
@@ -24,9 +24,9 @@ Outputs per batch (all on device):
 import math
 import torch
 
-from canvas import build_canvas_for_mask
+from canvas import build_canvas_for_mask, target_side_for_unit_var
 from cool_classes import resolve_cool_classes, validate_cool_classes
-from masks import build_masks
+from masks import build_masks, load_mask_metadata
 
 
 ANGLE_SCALE = math.sqrt(3.) / math.pi
@@ -50,6 +50,12 @@ def _cool_mask_indices(labels, inclass_ids, class_ids):
 
 
 class SpurSampler:
+    _DATA_FIELDS = frozenset({
+        "masks", "mask_flat", "H", "W",
+        "scaling", "translation_cu",
+        "angles", "colors", "indices", "cvertices", "M",
+    })
+
     def __init__(
         self,
         symmetry,
@@ -69,49 +75,75 @@ class SpurSampler:
 
         self.rotation_canvas = float(rotation_canvas)
         self.rotation_mask = float(rotation_mask)
+        self.symmetry = symmetry
+        self.num_tiles = num_tiles
+        self.side = target_side_for_unit_var(symmetry, num_tiles)
+        self.num_ret_tiles = num_ret_tiles if num_ret_tiles is not None else num_tiles
+        self.V1 = 7 if symmetry == 6 else 5
+        self._translation_canvas = translation_canvas
+        self._seed = seed
+        self._data_ready = False
 
         self.num_cool_classes, self.cool_class_ids = resolve_cool_classes(
             num_cool_classes,
             cool_class_ids,
         )
 
-        masks_data = build_masks()
+        metadata = load_mask_metadata()
         if self.cool_class_ids is not None:
-            validate_cool_classes(masks_data["class_names"])
-            keep = _cool_mask_indices(
-                masks_data["labels"],
-                masks_data["inclass_ids"],
+            validate_cool_classes(metadata["class_names"])
+            self._mask_keep = _cool_mask_indices(
+                metadata["labels"],
+                metadata["inclass_ids"],
                 self.cool_class_ids,
             )
-            for key in ("masks", "labels", "inclass_ids"):
-                masks_data[key] = masks_data[key][keep]
+            for key in ("labels", "inclass_ids"):
+                metadata[key] = metadata[key][self._mask_keep]
+        else:
+            self._mask_keep = None
+
+        self.labels = metadata["labels"].to(self.device)
+        self.inclass_ids = metadata["inclass_ids"].to(self.device)
+        self.class_names = metadata["class_names"]
+
+    def __getattr__(self, name):
+        if name in self._DATA_FIELDS:
+            self._ensure_data_ready()
+            return self.__dict__[name]
+        raise AttributeError(f"{type(self).__name__!s} has no attribute {name!r}")
+
+    def _ensure_data_ready(self):
+        """Decode masks and construct device geometry at the first data use."""
+        if self._data_ready:
+            return
+
+        masks_data = build_masks()
+        if self._mask_keep is not None:
+            masks_data["masks"] = masks_data["masks"][self._mask_keep]
+        if len(masks_data["masks"]) != len(self):
+            raise RuntimeError(
+                "Mask archive metadata changed after sampler initialization: "
+                f"expected {len(self)} masks, loaded {len(masks_data['masks'])}"
+            )
 
         mask_hw = tuple(masks_data["masks"].shape[1:])
         canvas_data = build_canvas_for_mask(
-            symmetry,
-            num_tiles,
+            self.symmetry,
+            self.num_tiles,
             mask_hw,
             masks_data["target_on"],
-            translation_canvas,
-            seed=seed,
+            self._translation_canvas,
+            seed=self._seed,
             return_indices=True,
         )
 
         self.masks = masks_data["masks"].to(self.device)          # (K, H, W) float32
-        self.labels = masks_data["labels"].to(self.device)        # (K,)
-        self.inclass_ids = masks_data["inclass_ids"].to(self.device)
-        self.class_names = masks_data["class_names"]
-        
         K, H, W = self.masks.shape
         self.mask_flat = self.masks.reshape(K, H * W)
         self.H, self.W = H, W
 
-        self.symmetry = canvas_data["symmetry"]
-        self.num_tiles = canvas_data["num_tiles"]
-        self.side = canvas_data["side"]
         self.scaling = canvas_data["scaling"]                     # canvas units per pixel
         self.translation_cu = canvas_data["translation"]          # canvas units
-        self.num_ret_tiles = num_ret_tiles if num_ret_tiles is not None else self.num_tiles
 
         centers = canvas_data["centers"].to(self.device)          # (M, 2)
         vertices = canvas_data["vertices"].to(self.device)        # (M, V, 2)
@@ -121,10 +153,21 @@ class SpurSampler:
 
         # inness points: center first, then the V vertices -> (M, V+1, 2)
         self.cvertices = torch.cat([centers[:, None, :], vertices], dim=1)
-        self.M, self.V1, _ = self.cvertices.shape
+        self.M, loaded_v1, _ = self.cvertices.shape
+        if loaded_v1 != self.V1:
+            raise RuntimeError(
+                f"Expected {self.V1} inness points for symmetry {self.symmetry}, "
+                f"loaded {loaded_v1}"
+            )
+        self._data_ready = True
+
+    def warmup(self):
+        """Eagerly load masks and canvas data, then return this sampler."""
+        self._ensure_data_ready()
+        return self
 
     def __len__(self):
-        return len(self.masks)
+        return len(self.labels)
 
     def transform_and_inness(self, mask_idx, generator=None):
         """
@@ -135,6 +178,7 @@ class SpurSampler:
         tile center), θ (B,) rotations, float inness (B, M), and Boolean
         vertex_in (B, M, V+1).
         """
+        self._ensure_data_ready()
         B, dev = len(mask_idx), self.device
 
         #---------------------------------
@@ -171,9 +215,10 @@ class SpurSampler:
         indices (B, N), labels (B,), inness (B, N), and Boolean vertex_in
         (B, N, V+1); vertices (B, N, V, 2) if requested.
         """
+        self._ensure_data_ready()
         B, dev = batch_size, self.device
         if mask_idx is None:
-            mask_idx = torch.randint(len(self.masks), (B,), device=dev, generator=generator)
+            mask_idx = torch.randint(len(self), (B,), device=dev, generator=generator)
         else:
             mask_idx = mask_idx.to(dev)
 
@@ -237,9 +282,9 @@ class SpurSampler:
         return out
 
     def sample_noise(self, batch_size, generator=None):
-        """Sample unit-variance Gaussian-XY noise with shape (B, N, 3)."""
+        """Sample mask-independent unit-variance noise with shape (B, N, 3)."""
         shape = (batch_size, self.num_ret_tiles)
-        kwargs = {"device": self.device, "dtype": self.cvertices.dtype, "generator": generator}
+        kwargs = {"device": self.device, "dtype": torch.float32, "generator": generator}
         xy = torch.randn((*shape, 2), **kwargs)
         angle = (torch.rand((*shape, 1), **kwargs) * 2. - 1.) * math.sqrt(3.)
         return torch.cat((xy, angle), dim=-1)

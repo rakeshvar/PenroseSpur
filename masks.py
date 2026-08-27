@@ -25,22 +25,48 @@ DEFAULT_WIDTH = 448
 EXPECTED_MASKS = 1400
 
 
-def load_raw_masks(archive=DEFAULT_ARCHIVE):
-    """Load archived GIFs as tightly cropped binary float arrays."""
+def _archive_entries(archive=DEFAULT_ARCHIVE):
+    """Return sorted GIF paths and filename-derived mask metadata."""
     archive = Path(archive)
     with zipfile.ZipFile(archive) as gifs:
         names = sorted(name for name in gifs.namelist() if name.lower().endswith(".gif"))
 
-        masks, class_names, inclass_ids = [], [], []
+    class_names, inclass_ids = [], []
+    for name in names:
+        stem = Path(name).stem
+        class_name, inclass_id = stem.rsplit("-", 1)
+        class_names.append(class_name)
+        inclass_ids.append(int(inclass_id))
+    return names, class_names, inclass_ids
+
+
+def load_mask_metadata(archive=DEFAULT_ARCHIVE):
+    """Load labels from archive filenames without decoding mask pixels."""
+    _, mask_class_names, inclass_ids = _archive_entries(archive)
+    class_names = sorted(set(mask_class_names))
+    name_to_id = {name: index for index, name in enumerate(class_names)}
+    labels = torch.tensor(
+        [name_to_id[name] for name in mask_class_names],
+        dtype=torch.long,
+    )
+    return {
+        "labels": labels,
+        "inclass_ids": torch.tensor(inclass_ids),
+        "class_names": class_names,
+    }
+
+
+def load_raw_masks(archive=DEFAULT_ARCHIVE):
+    """Load archived GIFs as tightly cropped binary float arrays."""
+    archive = Path(archive)
+    names, class_names, inclass_ids = _archive_entries(archive)
+    with zipfile.ZipFile(archive) as gifs:
+        masks = []
         for name in names:
             with gifs.open(name) as file:
                 with Image.open(io.BytesIO(file.read())) as image:
                     mask = (np.asarray(image.convert("L")) > 0).astype(np.float32)
             masks.append(mask)
-            stem = Path(name).stem
-            class_name, inclass_id = stem.rsplit("-", 1)
-            class_names.append(class_name)
-            inclass_ids.append(int(inclass_id))
 
     return masks, class_names, inclass_ids
 

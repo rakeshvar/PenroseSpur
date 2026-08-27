@@ -103,25 +103,34 @@ distribution or radius override.
 
 ## Lattice loss
 
-`lattice_loss.py` provides a color-aware nearest-neighbour metric for batched
-XY or XYA tensors:
+`lattice_loss.py` provides position, orientation, and combined metrics for
+batched scaled XYA tensors:
 
 ```python
-from lattice_loss import lattice_loss
+from lattice_loss import lattice_loss, lattice_loss_angle, lattice_loss_xy
 
-loss = lattice_loss(symmetry, side, xya, colors)
+xy_loss = lattice_loss_xy(symmetry, side, xya, colors)
+angle_loss = lattice_loss_angle(symmetry, xya)
+loss = lattice_loss(symmetry, side, xya, colors)  # xy_loss + angle_loss
 ```
 
-For every tile, the loss finds its nearest centre and assigns the exact target
-distance from the pair's colors. Hexagons always target `sqrt(3) * side`.
-Penrose targets are `sin(2*pi/5) * side` for thick/thick (`0/0`),
-`sin(pi/5) * side` for thin/thin (`1/1`), and `sin(3*pi/10) * side` for a
-mixed pair.
+For every tile, the XY loss finds its nearest centre and assigns the exact
+target distance from the pair's colors. Hexagons always target
+`sqrt(3) * side`. Penrose targets are `sin(2*pi/5) * side` for thick/thick
+(`0/0`), `sin(pi/5) * side` for thin/thin (`1/1`), and
+`sin(3*pi/10) * side` for a mixed pair.
 
 The default `multiplicative` error uses `r = d/d*`, `epsilon = 1/side`, and
 `max(r, (1 + epsilon)/(r + epsilon)) - 1`. Set `algo="quadratic"` for
 `MSE(d, d*)`, or `algo="logarithmic"` for the Itakura-Saito form
-`r - log(r) - 1`. All modes return the mean over tiles and batches.
+`r - log(r) - 1`.
+
+The angle loss is `0.1 * (1 - |mean(exp(i*k*theta))|^2)`, evaluated
+independently per sample and then averaged over the batch. The `0.1` scale
+makes it comparable in magnitude to the multiplicative XY loss. It uses `k=6`
+for hexagons and `k=10` for Penrose rhombuses, giving zero for the corresponding
+orientation coset and approaching `0.1` as its harmonic phases disperse.
+`theta` is recovered from the stored `sqrt(3)/pi`-scaled angle channel.
 
 ## Matching
 
@@ -304,9 +313,12 @@ python tests/check_stats.py [copies]  # full stats sweep over N; findings in tes
 - `cool_classes.py` — ordered preferred MPEG7 class IDs and names
 - `canvas.py` — builds mother canvas tensors in memory
 - `sampler.py` — `SpurSampler`, the on-the-fly batch generator
-- `lattice_loss.py` — color-aware nearest-neighbour lattice metrics
+- `lattice_loss.py` — nearest-neighbour XY, harmonic angle, and total metrics
 - `match.py` — exact LSA and Sinkhorn-based noise matching
+- `show/` — color schemes, SVG scenes, shared view boxes, and MP4 encoding
 - `tests/show_masks.py`, `tests/show_samples.py`, `tests/show_canvas.py`,
   `tests/show_inness.py` — visual sanity checks (output in `tests/output/`)
+- `tests/test_show_svg.py`, `tests/test_show_video.py`, `tests/show_gallery.py`
+  — rendering verification and the twelve-scheme gallery
 - `tests/check_stats.py`, `tests/check_stats.md` — statistics sweep and findings
 - `requirements.txt` — numpy, pillow, scipy, torch, matplotlib, plotly

@@ -45,6 +45,7 @@ def test_scaled_sample_angles():
 
     sampler = SpurSampler.__new__(SpurSampler)
     sampler.device = torch.device("cpu")
+    sampler._data_ready = True
     sampler.masks = torch.empty(1, 1, 1)
     sampler.M = sampler.num_ret_tiles = 4
     sampler.V1 = 1
@@ -77,6 +78,7 @@ def test_scaled_sample_angles():
 def test_inness_is_normalized():
     sampler = SpurSampler.__new__(SpurSampler)
     sampler.device = torch.device("cpu")
+    sampler._data_ready = True
     sampler.translation_cu = 0.0
     sampler.rotation_canvas = 0.0
     sampler.scaling = 1.0
