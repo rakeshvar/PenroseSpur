@@ -3,13 +3,21 @@
 import math
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from match import MATCH_METHODS, match, sinkhorn, sinkhorn_annealed_argmax
+import match as match_module
+from match import (
+    MATCH_METHODS,
+    balanced_group_sizes,
+    match,
+    sinkhorn,
+    sinkhorn_annealed_argmax,
+)
 from sampler import SpurSampler, _scaled_angle
 
 
@@ -102,6 +110,71 @@ def assert_permutation(permutation):
         assert torch.equal(torch.sort(row).values, expected)
 
 
+def test_balanced_group_sizes():
+    expected = {
+        40: (40,),
+        64: (64,),
+        80: (80,),
+        81: (41, 40),
+        96: (48, 48),
+        128: (64, 64),
+        160: (54, 53, 53),
+        237: (60, 59, 59, 59),
+        256: (64, 64, 64, 64),
+    }
+    for count, partition in expected.items():
+        assert balanced_group_sizes(count) == partition
+
+    for count in range(1, 513):
+        partition = balanced_group_sizes(count)
+        assert sum(partition) == count
+        assert max(partition) <= 80
+        assert max(partition) - min(partition) <= 1
+        if math.ceil(count / 80) <= count // 41:
+            assert min(partition) > 40
+
+
+def test_lsa_defaults_to_balanced_same_color_groups():
+    generator = torch.Generator().manual_seed(31)
+    data = torch.randn(1, 384, 3, generator=generator)
+    noise = torch.randn(1, 384, 3, generator=generator)
+    colors = torch.tensor([[0] * 237 + [1] * 147])
+    task_sizes = []
+    scipy_lsa = match_module.linear_sum_assignment
+
+    def record_size(cost):
+        task_sizes.append(cost.shape[0])
+        return scipy_lsa(cost)
+
+    with patch.object(match_module, "linear_sum_assignment", record_size):
+        first = match(
+            data,
+            noise,
+            method="lsa",
+            colors=colors,
+            lsa_workers=1,
+            generator=torch.Generator().manual_seed(19),
+            return_details=True,
+        )
+    second = match(
+        data,
+        noise,
+        method="lsa",
+        colors=colors,
+        lsa_workers=2,
+        generator=torch.Generator().manual_seed(19),
+        return_details=True,
+    )
+
+    assert task_sizes == [60, 59, 59, 59, 74, 73]
+    assert torch.equal(first.permutation, second.permutation)
+    assert_permutation(first.permutation)
+    assert torch.equal(
+        colors.gather(1, first.permutation),
+        colors,
+    )
+
+
 def test_sinkhorn_argmax_annealing():
     scores = torch.randn((1, 5, 5), generator=torch.Generator().manual_seed(0))
     initial = sinkhorn(scores, iterations=100).argmax(dim=2)
@@ -170,6 +243,8 @@ if __name__ == "__main__":
     test_noise()
     test_scaled_sample_angles()
     test_inness_is_normalized()
+    test_balanced_group_sizes()
+    test_lsa_defaults_to_balanced_same_color_groups()
     test_sinkhorn_argmax_annealing()
     test_matching()
     test_matching_uses_circular_angle_distance()

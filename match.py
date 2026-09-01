@@ -2,13 +2,14 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import math
 import os
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 import torch
 
-from flow_geometry import pairwise_xya_distance
+from flow_geometry import ANGLE_HALF_PERIOD, ANGLE_PERIOD, pairwise_xya_distance
 
 MATCH_METHODS = ("lsa", "sinkhorn.argmax", "sinkhorn.barycenter", "sinkhorn.lsa")
 
@@ -59,6 +60,110 @@ def gather_noise(noise, permutation):
     """Gather `(B, N, D)` noise using row-to-column assignment indices."""
     indices = permutation.unsqueeze(-1).expand(-1, -1, noise.shape[-1])
     return noise.gather(1, indices)
+
+
+def balanced_group_sizes(count, target_size=64, max_size=80):
+    """Balance ``count`` near target, avoiding sizes <= 40 when possible."""
+    if any(isinstance(value, bool) or not isinstance(value, int)
+           for value in (count, target_size, max_size)):
+        raise TypeError("count, target_size, and max_size must be integers")
+    if count <= 0 or target_size <= 0 or max_size <= 0:
+        raise ValueError("count, target_size, and max_size must be positive")
+    if target_size > max_size:
+        raise ValueError("target_size cannot exceed max_size")
+
+    min_groups = math.ceil(count / max_size)
+    max_groups_over_40 = count // 41
+    if min_groups <= max_groups_over_40:
+        groups = min(
+            range(min_groups, max_groups_over_40 + 1),
+            key=lambda candidate: (
+                abs(count / candidate - target_size),
+                candidate,
+            ),
+        )
+    else:
+        groups = min_groups
+
+    small, remainder = divmod(count, groups)
+    return tuple([small + 1] * remainder + [small] * (groups - remainder))
+
+
+def _group_assignment(batch, indices, data, noise, squared):
+    target = data[indices]
+    source = noise[indices]
+    xy = target[:, None, :2] - source[None, :, :2]
+    angle = np.remainder(
+        target[:, None, 2] - source[None, :, 2] + ANGLE_HALF_PERIOD,
+        ANGLE_PERIOD,
+    ) - ANGLE_HALF_PERIOD
+    cost = np.square(xy).sum(axis=-1) + np.square(angle)
+    if not squared:
+        cost = np.sqrt(cost)
+    rows, columns = linear_sum_assignment(cost)
+    return batch, indices[rows], indices[columns]
+
+
+def grouped_lsa(
+    data,
+    noise,
+    colors=None,
+    *,
+    target_size=64,
+    max_size=80,
+    workers=None,
+    generator=None,
+    squared=True,
+):
+    """Return exact assignments within shuffled, balanced same-color groups."""
+    if colors is not None and colors.shape != data.shape[:2]:
+        raise ValueError(
+            f"colors must have shape {tuple(data.shape[:2])}, got {tuple(colors.shape)}"
+        )
+
+    data_numpy = data.detach().cpu().numpy()
+    noise_numpy = noise.detach().cpu().numpy()
+    colors_numpy = None if colors is None else colors.detach().cpu().numpy()
+    batch_size, num_tiles = data.shape[:2]
+    permutation = np.broadcast_to(
+        np.arange(num_tiles, dtype=np.int64), (batch_size, num_tiles)
+    ).copy()
+    tasks = []
+    for batch in range(batch_size):
+        batch_colors = (
+            np.zeros(num_tiles, dtype=np.uint8)
+            if colors_numpy is None else colors_numpy[batch]
+        )
+        for color in np.unique(batch_colors):
+            indices = np.flatnonzero(batch_colors == color)
+            shuffle = torch.randperm(
+                len(indices), device=data.device, generator=generator
+            ).cpu().numpy()
+            indices = indices[shuffle]
+            offset = 0
+            for size in balanced_group_sizes(
+                len(indices), target_size, max_size
+            ):
+                group = indices[offset:offset + size]
+                tasks.append(
+                    (batch, group, data_numpy[batch], noise_numpy[batch], squared)
+                )
+                offset += size
+
+    available = os.cpu_count() or 1
+    worker_count = max(1, min(int(workers or available), available, len(tasks)))
+    if worker_count == 1:
+        assignments = map(lambda args: _group_assignment(*args), tasks)
+        for batch, rows, columns in assignments:
+            permutation[batch, rows] = columns
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            assignments = executor.map(
+                lambda args: _group_assignment(*args), tasks
+            )
+            for batch, rows, columns in assignments:
+                permutation[batch, rows] = columns
+    return torch.from_numpy(permutation).to(data.device)
 
 
 
@@ -115,6 +220,9 @@ def match(
     anneal_rate=0.5,
     anneal_steps=100,
     lsa_workers=None,
+    lsa_target_size=64,
+    lsa_max_size=80,
+    generator=None,
     return_details=False,
     squared=True,
 ):
@@ -122,7 +230,9 @@ def match(
 
     Inputs use the sampler's unit-variance `(x, y, scaled_angle)` coordinates.
     Matching is restricted to tiles of the same color. If `colors` is None,
-    all tiles are treated as one color. `lsa` produces a true permutation.
+    all tiles are treated as one color. By default, `lsa` shuffles each color
+    and solves balanced groups targeting 64 tiles with a maximum of 80; it
+    produces a true permutation. Pass `generator` for reproducible grouping.
     `sinkhorn.argmax` anneals its Sinkhorn temperature until row argmaxes cover
     every column, when possible. `sinkhorn.barycenter` returns the
     row-normalized soft Sinkhorn average.
@@ -141,12 +251,20 @@ def match(
     permutation = None
     converged = True
 
-    cost = pairwise_xya_distance(data, noise, squared=squared)
-
     if method == "lsa":
-        permutation = lsa(cost, colors=colors, workers=lsa_workers)
+        permutation = grouped_lsa(
+            data,
+            noise,
+            colors,
+            target_size=lsa_target_size,
+            max_size=lsa_max_size,
+            workers=lsa_workers,
+            generator=generator,
+            squared=squared,
+        )
         matched_noise = gather_noise(noise, permutation)
     else:
+        cost = pairwise_xya_distance(data, noise, squared=squared)
         logP = -cost / epsilon
         if colors is not None:
             same_color = colors.unsqueeze(2) == colors.unsqueeze(1)

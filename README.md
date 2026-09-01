@@ -138,21 +138,36 @@ orientation coset and approaching `0.1` as its harmonic phases disperse.
 Sinkhorn outputs:
 
 ```python
+import torch
+
 from match import match
 
+generator = torch.Generator(device=sampler.device).manual_seed(0)
 noise = sampler.sample_noise(64)
-matched = match(batch["xya"], noise, method="lsa")
+matched = match(
+    batch["xya"],
+    noise,
+    method="lsa",
+    colors=batch["colors"],
+    generator=generator,
+)
 matched_argmax = match(
-    batch["xya"], noise, method="argmax", epsilon=0.03, iterations=7
+    batch["xya"], noise, method="sinkhorn.argmax", epsilon=0.03, iterations=7
 )
 barycenters = match(
-    batch["xya"], noise, method="barycenter", epsilon=0.03, iterations=7
+    batch["xya"], noise, method="sinkhorn.barycenter", epsilon=0.03, iterations=7
 )
 ```
 
-`lsa` returns a true permutation. `argmax` can reuse the same noise row, and
-`barycenter` returns a row-normalized soft weighted average rather than a
-permutation. Sinkhorn defaults to epsilon `0.03` and 10 iterations.
+By default, `lsa` independently shuffles each color, balances it into groups
+targeting 64 tiles and capped at 80, and solves those groups in parallel. Set
+`lsa_target_size`, `lsa_max_size`, and `lsa_workers` to override those defaults.
+Groups differ by at most one tile and avoid sizes at or below 40 whenever a
+valid partition allows it. Passing `generator` makes grouping reproducible.
+LSA returns a true same-color permutation. `sinkhorn.argmax` can reuse the same
+noise row, and `sinkhorn.barycenter` returns a row-normalized soft weighted
+average rather than a permutation. Sinkhorn defaults to epsilon `0.03` and 10
+iterations.
 
 ## SVG and MP4 rendering
 

@@ -296,10 +296,16 @@ class SpurSampler:
         return data, noise
 
     def sample_matched_data_noise(self, batch_size, method="lsa", mask_idx=None, generator=None, **match_kwargs):
-        """Sample data and noise, then match noise to data (LSA by default)."""
+        """Sample data and noise, then same-color grouped LSA by default."""
         from match import match
 
-        data, noise = self.sample_data_noise(batch_size, mask_idx=mask_idx, generator=generator)
+        batch = self.sample_batch(
+            batch_size, mask_idx=mask_idx, generator=generator
+        )
+        data = batch["xya"]
+        noise = self.sample_noise(batch_size, generator=generator)
+        match_kwargs.setdefault("colors", batch["colors"])
+        match_kwargs.setdefault("generator", generator)
         matched_noise = match(data, noise, method=method, **match_kwargs)
         return data, matched_noise
 
