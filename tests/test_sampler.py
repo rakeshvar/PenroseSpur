@@ -56,13 +56,16 @@ def fake_metadata():
 
 def fake_canvas(symmetry, num_tiles, mask_hw, target_on, translation, **kwargs):
     vertices_per_tile = 6 if symmetry == 6 else 4
+    offset = kwargs["rng"].uniform() if kwargs.get("rng") is not None else 0.0
+    centers = torch.zeros(num_tiles, 2)
+    centers[:, 0] = offset
     return {
         "symmetry": symmetry,
         "num_tiles": num_tiles,
         "side": 1.0,
         "scaling": 1.0,
         "translation": translation,
-        "centers": torch.zeros(num_tiles, 2),
+        "centers": centers,
         "vertices": torch.zeros(num_tiles, vertices_per_tile, 2),
         "angles": torch.zeros(num_tiles),
         "colors": torch.zeros(num_tiles, dtype=torch.uint8),
@@ -157,6 +160,55 @@ class CoolClassSamplerTest(unittest.TestCase):
         sampler.sample_batch(1)
         self.build_masks.assert_called_once_with()
         self.build_canvas.assert_called_once()
+
+    def test_penrose_builds_one_fresh_canvas_per_batch(self):
+        sampler = SpurSampler(5, 2, device="cpu", seed=7)
+
+        sampler.sample_batch(1)
+        first_canvas = sampler.cvertices.clone()
+        self.assertEqual(self.build_canvas.call_count, 1)
+
+        sampler.sample_batch(1)
+        second_canvas = sampler.cvertices.clone()
+        self.assertEqual(self.build_canvas.call_count, 2)
+        self.assertFalse(torch.equal(first_canvas, second_canvas))
+        self.build_masks.assert_called_once_with()
+
+    def test_penrose_warmup_grid_is_refreshed_for_first_batch(self):
+        sampler = SpurSampler(5, 2, device="cpu", seed=7).warmup()
+        warmup_canvas = sampler.cvertices.clone()
+
+        sampler.sample_batch(1)
+
+        self.assertEqual(self.build_canvas.call_count, 2)
+        self.assertFalse(torch.equal(warmup_canvas, sampler.cvertices))
+
+    def test_seed_reproduces_penrose_canvas_sequence(self):
+        first = SpurSampler(5, 2, device="cpu", seed=11)
+        second = SpurSampler(5, 2, device="cpu", seed=11)
+
+        first_sequence = []
+        second_sequence = []
+        for sampler, sequence in (
+            (first, first_sequence),
+            (second, second_sequence),
+        ):
+            for _ in range(2):
+                sampler.sample_batch(1)
+                sequence.append(sampler.cvertices.clone())
+
+        self.assertTrue(torch.equal(first_sequence[0], second_sequence[0]))
+        self.assertTrue(torch.equal(first_sequence[1], second_sequence[1]))
+        self.assertFalse(torch.equal(first_sequence[0], first_sequence[1]))
+
+    def test_hex_reuses_canvas_and_default_translation_is_two(self):
+        sampler = SpurSampler(6, 2, device="cpu")
+
+        sampler.sample_batch(1)
+        sampler.sample_batch(1)
+
+        self.assertEqual(self.build_canvas.call_count, 1)
+        self.assertEqual(sampler.translation_cu, 2.0)
 
     def test_seeded_data_sampling_remains_deterministic(self):
         first = SpurSampler(6, 2, device="cpu")

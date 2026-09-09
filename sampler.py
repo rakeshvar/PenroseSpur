@@ -1,8 +1,9 @@
 """
 On-the-fly sample generation.
 
-Builds the mask tensor and mother canvas on the first data request; noise-only
-sampling stays lightweight. After loading, each batch is fully vectorized:
+Builds the mask tensor and first mother canvas on the first data request;
+noise-only sampling stays lightweight. Penrose batches generate a fresh
+de Bruijn mother canvas per call; hexagonal batches reuse one canvas:
   1. pick B masks, draw a rotation θ ~ U(-pi, pi) and a translation
      ~ U(-T, T)^2 (T = translation range in canvas units) per sample,
   2. rotate + translate all M canvas tiles (center + V vertices = V+1 inness points per tile),
@@ -22,6 +23,7 @@ Outputs per batch (all on device):
     rotation_mask (B,),
 """
 import math
+import numpy as np
 import torch
 
 from canvas import build_canvas_for_mask, target_side_for_unit_var
@@ -60,7 +62,7 @@ class SpurSampler:
         self,
         symmetry,
         num_tiles,
-        translation_canvas=0.,
+        translation_canvas=2.,
         num_ret_tiles=None,
         seed=None,
         device=None,
@@ -81,7 +83,7 @@ class SpurSampler:
         self.num_ret_tiles = num_ret_tiles if num_ret_tiles is not None else num_tiles
         self.V1 = 7 if symmetry == 6 else 5
         self._translation_canvas = translation_canvas
-        self._seed = seed
+        self._canvas_rng = np.random.default_rng(seed)
         self._data_ready = False
 
         self.num_cool_classes, self.cool_class_ids = resolve_cool_classes(
@@ -126,21 +128,27 @@ class SpurSampler:
                 f"expected {len(self)} masks, loaded {len(masks_data['masks'])}"
             )
 
-        mask_hw = tuple(masks_data["masks"].shape[1:])
-        canvas_data = build_canvas_for_mask(
-            self.symmetry,
-            self.num_tiles,
-            mask_hw,
-            masks_data["target_on"],
-            self._translation_canvas,
-            seed=self._seed,
-            return_indices=True,
-        )
-
         self.masks = masks_data["masks"].to(self.device)          # (K, H, W) float32
         K, H, W = self.masks.shape
         self.mask_flat = self.masks.reshape(K, H * W)
         self.H, self.W = H, W
+        self._target_on = masks_data["target_on"]
+
+        self._refresh_canvas(show=True)
+        self._data_ready = True
+
+    def _refresh_canvas(self, show=False):
+        """Build and install the next mother canvas."""
+        canvas_data = build_canvas_for_mask(
+            self.symmetry,
+            self.num_tiles,
+            (self.H, self.W),
+            self._target_on,
+            self._translation_canvas,
+            return_indices=True,
+            rng=self._canvas_rng if self.symmetry == 5 else None,
+            show=show,
+        )
 
         self.scaling = canvas_data["scaling"]                     # canvas units per pixel
         self.translation_cu = canvas_data["translation"]          # canvas units
@@ -159,7 +167,13 @@ class SpurSampler:
                 f"Expected {self.V1} inness points for symmetry {self.symmetry}, "
                 f"loaded {loaded_v1}"
             )
-        self._data_ready = True
+
+    def _prepare_sample_canvas(self):
+        """Ensure one newly generated canvas is ready for this batch."""
+        if not self._data_ready:
+            self._ensure_data_ready()
+        elif self.symmetry == 5:
+            self._refresh_canvas()
 
     def warmup(self):
         """Eagerly load masks and canvas data, then return this sampler."""
@@ -215,7 +229,7 @@ class SpurSampler:
         indices (B, N), labels (B,), inness (B, N), and Boolean vertex_in
         (B, N, V+1); vertices (B, N, V, 2) if requested.
         """
-        self._ensure_data_ready()
+        self._prepare_sample_canvas()
         B, dev = batch_size, self.device
         if mask_idx is None:
             mask_idx = torch.randint(len(self), (B,), device=dev, generator=generator)

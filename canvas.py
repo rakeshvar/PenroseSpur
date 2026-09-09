@@ -102,7 +102,7 @@ def hex_grid(radius, side=1):
 #--------------------------------------------------------------------------
 # Penrose P3 via de Bruijn pentagrid (symmetry 5)
 #--------------------------------------------------------------------------
-def pen_grid_debruijn(radius, side=1, rng=None):
+def pen_grid_debruijn(radius, side=1, rng=None, show=True):
     """
     Penrose rhombus patch covering a disk of `radius`, with edge length `side`.
 
@@ -142,7 +142,8 @@ def pen_grid_debruijn(radius, side=1, rng=None):
     Yx = (U[I, 0][:, None] * CJ - U[J, 0][:, None] * CI) / DetIJ
 
     keep = np.hypot(Xx, Yx) <= grid_radius                         # (10, L*L)
-    print(f"Keeping {keep.sum()} of {keep.size}=(10*{2*kmax+1}²) intersection points ({keep.mean() :.1%})")
+    if show:
+        print(f"Keeping {keep.sum()} of {keep.size}=(10*{2*kmax+1}²) intersection points ({keep.mean() :.1%})")
 
     XYx = np.stack([Xx[keep], Yx[keep]], axis=1)                   # (N, 2)
     I = np.broadcast_to(I[:, None], keep.shape)[keep]              # (10,) -> (10, 1) -> (10, L*L) -> (N,)
@@ -190,13 +191,14 @@ def polar_sort(centers):
     return np.lexsort((theta_cw, radius))
 
 
-def radius_side(symmetry, num_tiles, mask_hw, target_on, translation):
+def radius_side(symmetry, num_tiles, mask_hw, target_on, translation, show=True):
     Hmax, Wmax = mask_hw
     side = target_side_for_unit_var(symmetry, num_tiles)
     density = 1. / area_of_polygon(symmetry, side)
     scaling = math.sqrt(num_tiles / (target_on * density))    # canvas units per pixel
     radius = math.hypot(Hmax / 2, Wmax / 2) * scaling + translation * side
-    print(f"""
+    if show:
+        print(f"""
     Hmax={Hmax} Wmax={Wmax} 
     Hypot={math.hypot(Hmax / 2, Wmax / 2)} 
     scaling={scaling} 
@@ -208,7 +210,7 @@ def radius_side(symmetry, num_tiles, mask_hw, target_on, translation):
     radius = hypot * scaling + translation * side = {radius:.2f}
     """)
     
-    print(f"""
+        print(f"""
     num_tiles = {num_tiles:7d}
     side      = {side:7.5f} canvas units
     radius    = {radius:7.2f} canvas units
@@ -217,10 +219,34 @@ def radius_side(symmetry, num_tiles, mask_hw, target_on, translation):
     """)
     return radius, side
 
-def build_canvas_for_mask(symmetry, num_tiles, mask_hw, target_on, translation, 
-                          seed=None, return_indices=False):
-    radius, side = radius_side(symmetry, num_tiles, mask_hw, target_on, translation)
-    data = build_canvas(symmetry, radius, side, seed, return_indices)
+def build_canvas_for_mask(
+    symmetry,
+    num_tiles,
+    mask_hw,
+    target_on,
+    translation,
+    seed=None,
+    return_indices=False,
+    rng=None,
+    show=True,
+):
+    radius, side = radius_side(
+        symmetry,
+        num_tiles,
+        mask_hw,
+        target_on,
+        translation,
+        show=show,
+    )
+    data = build_canvas(
+        symmetry,
+        radius,
+        side,
+        seed,
+        return_indices,
+        rng=rng,
+        show=show,
+    )
     density = 1. / area_of_polygon(symmetry, side)
     scaling = math.sqrt(num_tiles / (target_on * density))
     data.update({
@@ -235,12 +261,28 @@ def build_canvas_for_mask(symmetry, num_tiles, mask_hw, target_on, translation,
     })
     return data
 
-def build_canvas(symmetry, radius, side, seed=None, return_indices=False):
+def build_canvas(
+    symmetry,
+    radius,
+    side,
+    seed=None,
+    return_indices=False,
+    rng=None,
+    show=True,
+):
     if symmetry == 6:
         centers, angles, colors, vertices = hex_grid(radius, side)
     else:
-        rng = np.random.default_rng(seed)
-        centers, angles, colors, vertices = pen_grid_debruijn(radius, side, rng)
+        if seed is not None and rng is not None:
+            raise ValueError("Pass either seed or rng, not both")
+        if rng is None:
+            rng = np.random.default_rng(seed)
+        centers, angles, colors, vertices = pen_grid_debruijn(
+            radius,
+            side,
+            rng,
+            show=show,
+        )
 
     if return_indices:
         order = polar_sort(centers)
@@ -248,7 +290,8 @@ def build_canvas(symmetry, radius, side, seed=None, return_indices=False):
 
     M = len(centers)
     num_colored = colors.sum()
-    print(f"""
+    if show:
+        print(f"""
     symmetry  = {symmetry:7d}
     canvas    = {M:7d} tiles
     coloredd  = {num_colored:7d} ({num_colored / M :.1%})"""

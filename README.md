@@ -2,8 +2,8 @@
 
 On-the-fly GPU tile sampling from MPEG7 masks. Instead of pre-generating
 datasets (as `PenroseDiffusion/scripts/create_dataset.py` does), PenroseSpur
-loads two precomputed tensors — the normalized masks and a mother canvas — and
-generates every training batch on the device.
+loads normalized masks and constructs mother canvases as needed, then generates
+each training batch on the device.
 
 ## How it works
 
@@ -11,16 +11,15 @@ generates every training batch on the device.
    cropped, rescaled so every mask has the same number of ON pixels
    (density-normalized, target = median ON count), and center-padded to common
    max dimensions. Result: a single `(1400, 613, 846)` uint8 tensor.
-2. **Mother canvas** (`canvas.py`, built once per symmetry/N/T): a patch of M
-   tiles covering a disk of radius `hypot(H/2, W/2)·scaling + T·unit_side` —
-   large enough for any mask under any rotation plus a translation jitter of
-   T polygon sides.
+2. **Mother canvas** (`canvas.py`): a patch of M tiles covering a disk of radius
+   `hypot(H/2, W/2)·scaling + T·unit_side` — large enough for any mask under
+   any rotation plus a translation jitter of T polygon sides.
    - Symmetry 6: hexagonal grid (formulas from `code/polygons/hex/qrs.py`;
-     color 1 = "dark", exactly 1/3 of tiles).
+     color 1 = "dark", exactly 1/3 of tiles), built once and reused.
    - Symmetry 5: Penrose P3 rhombuses via the **de Bruijn pentagrid**
      construction (ported from `Notes/Sklar/elephant/generate_random_elephant.py`)
-     with random grid offsets `gamma` — every build (seed) is a distinct
-     Penrose patch. Angle/color conventions match
+     with random grid offsets `gamma` — one fresh grid is built for every
+     `sample_batch` call and shared by that batch. Angle/color conventions match
      `PenroseDiffusion/code/polygons/pen/xya.py` (color 1 = thin, fraction
      psi^2 = 0.382).
 3. **Sampler** (`sampler.py`, every batch, fully vectorized on the device):
@@ -54,7 +53,6 @@ from sampler import SpurSampler
 sampler = SpurSampler(
     symmetry=5,
     num_tiles=96,
-    translation_canvas=2.0,
     seed=0,
 )
 batch = sampler.sample_batch(64)
@@ -67,6 +65,11 @@ batch["vertex_in"] # (64, 96, V+1) thresholded center/vertex mask probes
 
 noise = sampler.sample_noise(64)  # N(0, I) positions
 ```
+
+`translation_canvas` defaults to `2.0` polygon sides for both symmetries.
+For Penrose sampling, `seed` initializes a persistent NumPy random stream:
+successive batches use distinct grids, while samplers with the same seed and
+call sequence reproduce the same grid sequence.
 
 Set `num_cool_classes` to sample only from a prefix of the 30-class preference
 list in `cool_classes.py`:

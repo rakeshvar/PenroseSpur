@@ -53,6 +53,7 @@ def test_scaled_sample_angles():
 
     sampler = SpurSampler.__new__(SpurSampler)
     sampler.device = torch.device("cpu")
+    sampler.symmetry = 6
     sampler._data_ready = True
     sampler.masks = torch.empty(1, 1, 1)
     sampler.M = sampler.num_ret_tiles = 4
