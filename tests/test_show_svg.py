@@ -83,6 +83,17 @@ class SvgTest(unittest.TestCase):
             [10.0, 1.0, 20.0, 1.0],
         )
 
+    def test_explicit_stroke_width_is_display_pixels(self):
+        polygons, colors = polygons_from_xya(self.hex_xya, self.colors, 6, 0.5)
+        svg = render_polygons_svg(
+            polygons,
+            colors,
+            scheme="spur",
+            stroke_width=1.0,
+        )
+        self.assertIn("stroke-width: 1.00000", svg)
+        self.assertIn("vector-effect: non-scaling-stroke", svg)
+
     def test_batched_xya_selects_requested_sample(self):
         values = np.stack((self.hex_xya, self.hex_xya + [3.0, 0.0, 0.0]))
         colors = np.stack((self.colors, self.colors))

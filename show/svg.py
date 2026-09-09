@@ -236,6 +236,7 @@ def render_polygons_svg(
     palette: str | int | ColorScheme | Palette | None = None,
     background: str | None = None,
     stroke: str | None = None,
+    stroke_width: float | None = None,
     show_arcs: bool = False,
     radius: float | None = None,
     opacities=None,
@@ -264,6 +265,10 @@ def render_polygons_svg(
         raise ValueError("alpha must be in [0, 1]")
     if precision < 0:
         raise ValueError("precision must be non-negative")
+    if stroke_width is not None and (
+        not np.isfinite(stroke_width) or stroke_width <= 0
+    ):
+        raise ValueError("stroke_width must be a positive finite display-pixel width")
     selected = palette if palette is not None else scheme
     resolved = get_scheme(symmetry, selected)
     background = resolved.background if background is None else background
@@ -275,10 +280,15 @@ def render_polygons_svg(
     else:
         box = ViewBox(*map(float, viewbox))
     side = float(np.linalg.norm(values[0, 1] - values[0, 0]))
-    stroke_width = side / 100 * display_height / box.height
+    resolved_stroke_width = (
+        side / 100 * display_height / box.height
+        if stroke_width is None
+        else float(stroke_width)
+    )
     styles = [
         (
-            f".tile {{ stroke: {escape(stroke)}; stroke-width: {stroke_width:.5f}; "
+            f".tile {{ stroke: {escape(stroke)}; "
+            f"stroke-width: {resolved_stroke_width:.5f}; "
             "stroke-linejoin: round; vector-effect: non-scaling-stroke; }"
         )
     ]
@@ -288,7 +298,7 @@ def render_polygons_svg(
     draw_arcs = show_arcs and symmetry == 5
     if draw_arcs:
         styles.append(
-            f".arc {{ fill: none; stroke-width: {3 * stroke_width:.5f}; "
+            f".arc {{ fill: none; stroke-width: {3 * resolved_stroke_width:.5f}; "
             f"stroke-opacity: {0.8 * alpha:.4f}; "
             "vector-effect: non-scaling-stroke; }"
         )
@@ -323,7 +333,7 @@ def render_polygons_svg(
         body.append(
             f'<circle class="radius" cx="0" cy="0" r="{radius:.{precision}f}" '
             f'fill="none" stroke="{escape(stroke)}" '
-            f'stroke-width="{3 * stroke_width:.5f}" '
+            f'stroke-width="{3 * resolved_stroke_width:.5f}" '
             'vector-effect="non-scaling-stroke"/>'
         )
     if mark_duplicates:
@@ -363,6 +373,7 @@ def save_polygons(
     show_polygons=True,
     alpha=0.7,
     *,
+    stroke_width=None,
     scheme=None,
     viewbox=None,
     display_height=DISPLAY_HEIGHT,
@@ -379,6 +390,7 @@ def save_polygons(
         scheme=scheme,
         background=background,
         stroke=stroke,
+        stroke_width=stroke_width,
         show_arcs=show_arcs,
         radius=radius,
         opacities=opacities,

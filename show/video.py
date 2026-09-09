@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -180,6 +182,69 @@ def rasterize_svg_frame(
     return destination
 
 
+def _rasterize_svg_sequence(
+    svg_paths: Sequence[Path],
+    output_directory: Path,
+    *,
+    background: str,
+    ffmpeg: str,
+) -> list[Path]:
+    """Rasterize a numbered SVG sequence in one ffmpeg process."""
+    if not svg_paths:
+        return []
+    output_pattern = output_directory / "unique_%05d.png"
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-v",
+                "error",
+                "-threads",
+                "1",
+                "-y",
+                "-framerate",
+                "1",
+                "-i",
+                str(output_directory / "raster_%05d.svg"),
+                "-vf",
+                (
+                    "pad=ceil(iw/2)*2:ceil(ih/2)*2:"
+                    f"(ow-iw)/2:(oh-ih)/2:color={background},format=rgb24"
+                ),
+                "-vsync",
+                "0",
+                "-start_number",
+                "0",
+                str(output_pattern),
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            "ffmpeg failed to batch-rasterize "
+            f"{len(svg_paths)} SVG frames with exit code {error.returncode}"
+        ) from error
+    outputs = [
+        output_directory / f"unique_{index:05d}.png"
+        for index in range(len(svg_paths))
+    ]
+    missing = [path for path in outputs if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "ffmpeg batch rasterization did not produce the expected frame: "
+            f"{missing[0]}"
+        )
+    return outputs
+
+
+def _link_or_copy(source: Path, destination: Path) -> None:
+    """Materialize one numbered frame, preferring a zero-copy hard link."""
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copyfile(source, destination)
+
+
 def save_mp4(
     svg_paths: Sequence[Path | str],
     output_path: Path | str,
@@ -205,8 +270,19 @@ def save_mp4(
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="penrose-spur-video-") as temporary:
         directory = Path(temporary)
+        unique_by_digest: dict[bytes, int] = {}
+        unique_svgs: list[Path] = []
+        frame_to_unique: list[int] = []
         for index, frame in enumerate(frames):
-            normalized = directory / f"source_{index:04d}.svg"
+            digest = hashlib.sha256(frame.read_bytes()).digest()
+            unique_index = unique_by_digest.get(digest)
+            if unique_index is not None:
+                frame_to_unique.append(unique_index)
+                continue
+            unique_index = len(unique_svgs)
+            unique_by_digest[digest] = unique_index
+            frame_to_unique.append(unique_index)
+            normalized = directory / f"normalized_{unique_index:05d}.svg"
             normalize_svg_canvas(
                 frame,
                 box,
@@ -214,11 +290,19 @@ def save_mp4(
                 display_height=settings.display_height,
                 output_path=normalized,
             )
-            rasterize_svg_frame(
-                normalized,
-                directory / f"frame_{index:04d}.png",
-                background=settings.background,
-                ffmpeg=executable,
+            raster_safe = directory / f"raster_{unique_index:05d}.svg"
+            _raster_safe_svg(normalized, raster_safe)
+            unique_svgs.append(raster_safe)
+        unique_pngs = _rasterize_svg_sequence(
+            unique_svgs,
+            directory,
+            background=settings.background,
+            ffmpeg=executable,
+        )
+        for index, unique_index in enumerate(frame_to_unique):
+            _link_or_copy(
+                unique_pngs[unique_index],
+                directory / f"frame_{index:05d}.png",
             )
         with tempfile.NamedTemporaryFile(
             prefix=f".{output.stem}-",
@@ -237,7 +321,7 @@ def save_mp4(
                     "-framerate",
                     str(settings.fps),
                     "-i",
-                    str(directory / "frame_%04d.png"),
+                    str(directory / "frame_%05d.png"),
                     "-c:v",
                     settings.codec,
                     "-crf",
@@ -271,6 +355,7 @@ def save_trajectory_mp4(
     angle_scale: float = 1.0,
     scheme=None,
     opacities=None,
+    alpha: float = 0.7,
     show_arcs: bool | None = None,
     options: VideoOptions | None = None,
 ) -> Path:
@@ -358,6 +443,7 @@ def save_trajectory_mp4(
                     angle_scale=angle_scale,
                     scheme=scheme,
                     opacities=frame_opacity,
+                    alpha=alpha,
                     show_arcs=arcs,
                     viewbox=box,
                 )
@@ -368,6 +454,7 @@ def save_trajectory_mp4(
                     colors,
                     scheme=scheme,
                     opacities=frame_opacity,
+                    alpha=alpha,
                     show_arcs=arcs,
                     viewbox=box,
                 )

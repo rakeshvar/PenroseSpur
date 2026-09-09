@@ -67,15 +67,29 @@ class VideoTest(unittest.TestCase):
                 self._frame(root, "a.svg", 0.2),
             ]
             commands = []
+            rasterized = []
 
             def fake_run(command, check):
                 commands.append(command)
                 Path(command[-1]).write_bytes(b"fake")
 
+            def fake_rasterize(paths, output_directory, **options):
+                rasterized.extend(paths)
+                outputs = []
+                for index in range(len(paths)):
+                    output = output_directory / f"unique_{index:05d}.png"
+                    output.write_bytes(b"png")
+                    outputs.append(output)
+                return outputs
+
             output = root / "movie.mp4"
             with (
                 mock.patch("show.video.shutil.which", return_value="/fake/ffmpeg"),
                 mock.patch("show.video.subprocess.run", side_effect=fake_run),
+                mock.patch(
+                    "show.video._rasterize_svg_sequence",
+                    side_effect=fake_rasterize,
+                ),
             ):
                 result = save_mp4(
                     frames,
@@ -88,7 +102,35 @@ class VideoTest(unittest.TestCase):
             self.assertEqual(encode[encode.index("-framerate") + 1], "7")
             self.assertEqual(encode[encode.index("-crf") + 1], "22")
             self.assertIn("+faststart", encode)
-            self.assertEqual(len(commands), 3)
+            self.assertEqual(len(commands), 1)
+            self.assertEqual(len(rasterized), 2)
+
+    def test_save_mp4_rasterizes_identical_frames_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frame = self._frame(root, "frame.svg")
+            unique_counts = []
+
+            def fake_rasterize(paths, output_directory, **options):
+                unique_counts.append(len(paths))
+                output = output_directory / "unique_00000.png"
+                output.write_bytes(b"png")
+                return [output]
+
+            def fake_run(command, check):
+                Path(command[-1]).write_bytes(b"fake")
+
+            with (
+                mock.patch("show.video.shutil.which", return_value="/fake/ffmpeg"),
+                mock.patch("show.video.subprocess.run", side_effect=fake_run),
+                mock.patch(
+                    "show.video._rasterize_svg_sequence",
+                    side_effect=fake_rasterize,
+                ),
+            ):
+                save_mp4([frame, frame, frame], root / "movie.mp4")
+
+            self.assertEqual(unique_counts, [1])
 
     def test_static_tile_opacities_are_not_mistaken_for_frame_opacities(self):
         states = [
