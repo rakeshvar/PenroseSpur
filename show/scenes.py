@@ -87,8 +87,7 @@ def render_comparison_svg(
     background = resolved.background if background is None else background
     line_width = max(side / 65.0, box.width / 5000.0)
     styles = [
-        ".scene-layer { stroke-linejoin: round; vector-effect: non-scaling-stroke; }",
-        ".correspondence { vector-effect: non-scaling-stroke; }",
+        ".scene-layer { stroke-linejoin: round; }",
         ".scene-text { font-family: sans-serif; }",
     ]
     body: list[str] = []
@@ -202,6 +201,7 @@ def render_comparison_svg(
     return build_svg_document(
         box,
         body,
+        styles=styles,
         display_height=display_height,
         background=background,
     )
