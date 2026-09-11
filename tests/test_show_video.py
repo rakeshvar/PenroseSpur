@@ -160,8 +160,10 @@ class VideoTest(unittest.TestCase):
             self.assertIn('opacity="0.1400"', svg)
             self.assertIn('opacity="0.5600"', svg)
 
-    def test_default_video_rate_is_thirty_fps(self):
-        self.assertEqual(VideoOptions().fps, 30)
+    def test_default_video_options(self):
+        options = VideoOptions()
+        self.assertEqual(options.fps, 30)
+        self.assertEqual(options.background, "black")
 
     def test_xya_resampling_uses_cumulative_movement(self):
         states = np.array(

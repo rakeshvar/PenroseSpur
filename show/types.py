@@ -146,7 +146,7 @@ class VideoOptions:
     """H.264 MP4 encoding options."""
 
     fps: int = 30
-    background: str = "white"
+    background: str = "black"
     crf: int = 18
     codec: str = "libx264"
     overwrite: bool = True

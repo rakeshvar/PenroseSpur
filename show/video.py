@@ -53,7 +53,7 @@ def normalize_svg_canvas(
     path: Path | str,
     viewbox: ViewBox | tuple[float, float, float, float],
     *,
-    background: str = "white",
+    background: str = "black",
     display_height: int = 1080,
     output_path: Path | str | None = None,
 ) -> tuple[int, int]:
@@ -139,7 +139,7 @@ def rasterize_svg_frame(
     svg_path: Path | str,
     png_path: Path | str,
     *,
-    background: str = "white",
+    background: str = "black",
     ffmpeg: str | None = None,
 ) -> Path:
     """Rasterize one SVG frame with stroke behavior preserved."""
