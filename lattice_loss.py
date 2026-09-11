@@ -136,8 +136,70 @@ def lattice_loss_angle(symmetry, xya):
     return _angle_losses(symmetry, xya).mean()
 
 
+def _tile_vertices(symmetry, side, xya, colors):
+    centers = xya[..., :2]
+    radians = xya[..., 2] * (math.pi / math.sqrt(3.0))
+    if symmetry == 6:
+        vertex_angles = (
+            radians[..., None]
+            + torch.arange(6, dtype=xya.dtype, device=xya.device) * (math.pi / 3.0)
+            - math.pi / 6.0
+        )
+        offsets = side * torch.stack(
+            (vertex_angles.cos(), vertex_angles.sin()), dim=-1
+        )
+    else:
+        top_angles = torch.where(
+            colors.bool(),
+            xya.new_tensor(math.pi / 5.0),
+            xya.new_tensor(3.0 * math.pi / 5.0),
+        )
+        minor = side * torch.sin(top_angles / 2.0)
+        major = side * torch.cos(top_angles / 2.0)
+        cosine, sine = radians.cos(), radians.sin()
+        minor_axis = minor[..., None] * torch.stack((cosine, sine), dim=-1)
+        major_axis = major[..., None] * torch.stack((-sine, cosine), dim=-1)
+        offsets = torch.stack(
+            (minor_axis, major_axis, -minor_axis, -major_axis), dim=-2
+        )
+    return centers[..., None, :] + offsets
+
+
+def lattice_loss_edge(symmetry, side, xya, colors):
+    """Return nearest-neighbour shared-edge vertex misalignment.
+
+    For each tile, this finds its nearest centre neighbour, computes every
+    vertex-to-vertex distance between the two polygons, and averages the two
+    smallest distances. Dividing by ``side`` makes the result dimensionless:
+    zero means the two vertices of a shared edge coincide exactly, while
+    ``0.5`` means an average endpoint mismatch of half a tile side.
+
+    Neighbour selection and selection of the two closest vertex pairs are
+    discrete, but gradients flow through the selected vertex distances.
+    """
+    side_tensor, colors = _validate_inputs(symmetry, side, xya, colors)
+    _, nearest_indices = _nearest_neighbours(xya)
+    vertices = _tile_vertices(symmetry, side_tensor, xya, colors)
+    vertex_count = vertices.shape[-2]
+    neighbours = torch.gather(
+        vertices,
+        1,
+        nearest_indices[..., None, None].expand(
+            -1, -1, vertex_count, vertices.shape[-1]
+        ),
+    )
+    vertex_distances = torch.cdist(
+        vertices.flatten(0, 1),
+        neighbours.flatten(0, 1),
+    ).reshape(*xya.shape[:2], vertex_count * vertex_count)
+    endpoint_distances = vertex_distances.topk(2, dim=-1, largest=False).values
+    return (endpoint_distances / side_tensor).mean()
+
+
 def lattice_loss(symmetry, side, xya, colors, algo="multiplicative"):
-    """Return the sum of position and orientation lattice losses."""
-    return lattice_loss_xy(symmetry, side, xya, colors, algo) + lattice_loss_angle(
-        symmetry, xya
+    """Return the sum of position, orientation, and shared-edge lattice losses."""
+    return (
+        lattice_loss_xy(symmetry, side, xya, colors, algo)
+        + lattice_loss_angle(symmetry, xya)
+        + lattice_loss_edge(symmetry, side, xya, colors)
     )

@@ -6,7 +6,12 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lattice_loss import lattice_loss, lattice_loss_angle, lattice_loss_xy
+from lattice_loss import (
+    lattice_loss,
+    lattice_loss_angle,
+    lattice_loss_edge,
+    lattice_loss_xy,
+)
 
 
 class LatticeLossTest(unittest.TestCase):
@@ -19,10 +24,10 @@ class LatticeLossTest(unittest.TestCase):
         )
         for algo in ("quadratic", "logarithmic", "multiplicative"):
             with self.subTest(algo=algo):
-                first = lattice_loss(
+                first = lattice_loss_xy(
                     6, 1.0, xya, torch.tensor([[0, 0]]), algo=algo
                 )
-                second = lattice_loss(
+                second = lattice_loss_xy(
                     6, 1.0, xya, torch.tensor([[1, 7]]), algo=algo
                 )
                 self.assertAlmostEqual(first.item(), 0.0, places=12)
@@ -45,7 +50,7 @@ class LatticeLossTest(unittest.TestCase):
                         dtype=torch.float64,
                     )
                     colors = torch.tensor([pair], dtype=torch.uint8)
-                    loss = lattice_loss(5, side, xya, colors, algo=algo)
+                    loss = lattice_loss_xy(5, side, xya, colors, algo=algo)
                     self.assertAlmostEqual(loss.item(), 0.0, places=12)
 
     def test_algorithms_match_hand_calculation(self):
@@ -56,9 +61,9 @@ class LatticeLossTest(unittest.TestCase):
         )
         colors = torch.zeros((1, 2), dtype=torch.uint8)
 
-        quadratic = lattice_loss(6, 1.0, xya, colors, algo="quadratic")
-        logarithmic = lattice_loss(6, 1.0, xya, colors, algo="logarithmic")
-        multiplicative = lattice_loss(6, 1.0, xya, colors)
+        quadratic = lattice_loss_xy(6, 1.0, xya, colors, algo="quadratic")
+        logarithmic = lattice_loss_xy(6, 1.0, xya, colors, algo="logarithmic")
+        multiplicative = lattice_loss_xy(6, 1.0, xya, colors)
 
         self.assertAlmostEqual(quadratic.item(), 3.0, places=12)
         self.assertAlmostEqual(
@@ -76,7 +81,7 @@ class LatticeLossTest(unittest.TestCase):
             dtype=torch.float64,
         )
         colors = torch.zeros((2, 2), dtype=torch.uint8)
-        loss = lattice_loss(6, 1.0, xya, colors, algo="quadratic")
+        loss = lattice_loss_xy(6, 1.0, xya, colors, algo="quadratic")
         self.assertAlmostEqual(loss.item(), 1.5, places=12)
 
     def test_all_algorithms_have_finite_gradients(self):
@@ -115,7 +120,67 @@ class LatticeLossTest(unittest.TestCase):
         xya[..., 2] = radians * (math.sqrt(3.0) / math.pi)
         self.assertAlmostEqual(lattice_loss_angle(6, xya).item(), 0.1, places=12)
 
-    def test_total_is_sum_of_xy_and_angle_losses(self):
+    def test_edge_loss_is_zero_for_edge_sharing_hexagons(self):
+        spacing = math.sqrt(3.0)
+        xya = torch.tensor(
+            [[[0.0, 0.0, 0.0], [spacing, 0.0, 0.0]]],
+            dtype=torch.float64,
+        )
+        colors = torch.zeros((1, 2), dtype=torch.uint8)
+        self.assertAlmostEqual(
+            lattice_loss_edge(6, 1.0, xya, colors).item(), 0.0, places=12
+        )
+
+    def test_edge_loss_detects_center_orientation_mismatch(self):
+        spacing = math.sqrt(3.0)
+        angle_scale = math.sqrt(3.0) / math.pi
+        aligned = torch.tensor(
+            [[[0.0, 0.0, 0.0], [spacing, 0.0, 0.0]]],
+            dtype=torch.float64,
+        )
+        misaligned = aligned.clone()
+        misaligned[..., 2] = (math.pi / 6.0) * angle_scale
+        colors = torch.zeros((1, 2), dtype=torch.uint8)
+        self.assertGreater(
+            lattice_loss_edge(6, 1.0, misaligned, colors).item(),
+            lattice_loss_edge(6, 1.0, aligned, colors).item(),
+        )
+
+    def test_edge_loss_is_zero_for_edge_sharing_penrose_rhombuses(self):
+        top_angle = 3.0 * math.pi / 5.0
+        center_offset = torch.tensor(
+            [math.sin(top_angle / 2.0), math.cos(top_angle / 2.0)],
+            dtype=torch.float64,
+        )
+        xya = torch.zeros((1, 2, 3), dtype=torch.float64)
+        xya[0, 1, :2] = center_offset
+        colors = torch.zeros((1, 2), dtype=torch.uint8)
+        self.assertAlmostEqual(
+            lattice_loss_edge(5, 1.0, xya, colors).item(), 0.0, places=12
+        )
+
+    def test_edge_loss_is_normalized_by_side(self):
+        losses = []
+        for side in (0.5, 3.0):
+            xya = torch.tensor(
+                [[[0.0, 0.0, 0.0], [1.1 * math.sqrt(3.0) * side, 0.0, 0.0]]],
+                dtype=torch.float64,
+            )
+            colors = torch.zeros((1, 2), dtype=torch.uint8)
+            losses.append(lattice_loss_edge(6, side, xya, colors))
+        torch.testing.assert_close(losses[0], losses[1])
+
+    def test_edge_loss_has_finite_gradients(self):
+        xya = torch.tensor(
+            [[[0.0, 0.0, 0.1], [1.6, 0.2, -0.1]]],
+            requires_grad=True,
+        )
+        loss = lattice_loss_edge(6, 1.0, xya, torch.zeros((1, 2)))
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isfinite(xya.grad).all())
+
+    def test_total_is_sum_of_xy_angle_and_edge_losses(self):
         xya = torch.tensor(
             [[[0.0, 0.0, 0.0], [2.0, 0.0, 0.11], [0.0, 2.0, -0.23]]],
             dtype=torch.float64,
@@ -127,7 +192,8 @@ class LatticeLossTest(unittest.TestCase):
                     total = lattice_loss(symmetry, 1.0, xya, colors, algo=algo)
                     xy = lattice_loss_xy(symmetry, 1.0, xya, colors, algo=algo)
                     angle = lattice_loss_angle(symmetry, xya)
-                    torch.testing.assert_close(total, xy + angle)
+                    edge = lattice_loss_edge(symmetry, 1.0, xya, colors)
+                    torch.testing.assert_close(total, xy + angle + edge)
 
     def test_invalid_inputs_are_rejected(self):
         valid = torch.zeros((1, 2, 3))
